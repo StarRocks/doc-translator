@@ -153,3 +153,5 @@ shared-nothing: 共有なし
 object storage: オブジェクトストレージ
 logical view: ビュー
 join: ジョイン
+SHOW TABLES: SHOW TABLES
+ALTER TABLE: ALTER TABLE

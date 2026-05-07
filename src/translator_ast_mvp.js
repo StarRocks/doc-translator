@@ -41,6 +41,10 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return `__MTX_NEVER_${id}__`;
     }
 
+    isFullyProtected(text) {
+        return typeof text === 'string' && /^(\s*__MTX_NEVER_\d+__\s*)+$/.test(text);
+    }
+
     isSkippableTextParent(parentType) {
         return ['code', 'inlineCode', 'yaml', 'html', 'math', 'inlineMath', 'mdxjsEsm'].includes(parentType);
     }
@@ -856,8 +860,11 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             return content;
         }
 
-        const chunks = this.splitEntriesForTranslation(protectedEntries);
-        const translatedEntries = [];
+        const entriesToTranslate = protectedEntries.filter(e => !this.isFullyProtected(e.text));
+        const preTranslatedEntries = protectedEntries.filter(e => this.isFullyProtected(e.text));
+
+        const chunks = this.splitEntriesForTranslation(entriesToTranslate);
+        const translatedEntries = [...preTranslatedEntries];
         let passedChunks = 0;
         let failedChunks = 0;
         let parseRepairCount = 0;

@@ -27,13 +27,15 @@ ${never_translate}
 
 - Do not translate target markdown links. Never translate the part of the link inside (). For instance here [https://wandb.ai/site](https://wandb.ai/site) do not translate anything, but on this, you should translate the [] part:
 [track metrics](./guides/track.md), [create logs](./guides/artifacts.md).
+- **Exception**: If the `[...]` display text of a link consists entirely of FORBIDDEN TERMS (SQL keywords or commands), do NOT translate it. For example, `[CREATE TABLE](CREATE_TABLE.md)`, `[ALTER TABLE](ALTER_TABLE.md)`, `[SHOW TABLES](SHOW_TABLES.md)`, and `[USE](USE.md)` must remain exactly as-is.
 - Markdown links must always have a space before the opening square bracket `[`. If there is a missing space add it.
 - Markdown links must always have a space after the closing parens `)`. If there is a missing space add it.
 - Be careful with `<Tabs>` and `<TabItem>` formatting. Respect spacing and newlines around these important constructs. Especially after lists, be sure to keep the same spacing. There must be a double newline after the list.
 - For inline formatting (italic, bold, strikethrough, inline code) in Japanese, consider adding spaces before and after when applying to part of a word/phrase. For example "_A_ and _B_" should be translated as "_A_ と _B_", not "_A_と_B_". Without spaces, the translated markdown does not work.
 - Add a space when switching between alphabets and Japanese characters including Kanji, Hiragana, and Katagana.
 - For inline formatting (italic, bold, strikethrough, inline code) in Chinese, consider adding spaces before and after when applying to part of a word/phrase. For example "_A_ and _B_" should be translated as "_A_ 和 _B_", not "_A_和_B_". Without spaces, the translated markdown does not work.
-- Do not treat capitalized words as proper nouns requiring leaving them in the source language unless the phrase appears in the translation dictionary.
+- Do not treat capitalized words as proper nouns requiring leaving them in the source language unless the phrase appears in the translation dictionary or the FORBIDDEN TERMS list.
+- When a markdown link's display text `[...]` consists entirely of terms from the FORBIDDEN TERMS list (SQL keywords or commands), do not translate it. For example, `[CREATE TABLE](CREATE_TABLE.md)` must remain `[CREATE TABLE](CREATE_TABLE.md)` — never translate it to `[テーブル作成](CREATE_TABLE.md)` or any other language.
 - When translating to Chinese or Japanese use the proper comma: If a comma appears outside of inline code or code blocks, then use the Japanese comma `、` or the Chinese comma `、`.
 - When the target language is English, normalize spacing around inline code.
    - Use exactly one space between plain text and inline code when they are separate words.
@@ -61,8 +63,21 @@ ${never_translate}
    - If the source text uses Markdown list syntax (-, *, +, or numbered lists), keep it in Markdown format.
    - Do NOT convert Markdown lists to HTML <ul>, <li>, or <ol> tags.
    - Preserve indentation of nested lists exactly as provided.
-   - Do NOT create extra list item lines. If the source has 4 list items, the translation must have exactly 4 list items.
+   - Do NOT create extra list item lines, and do NOT drop or merge existing list items. The translation must have exactly the same number of list items as the source.
    - Do NOT split a single list item value across multiple lines. Keep each list item on a single line.
    - Do NOT create placeholder list items with empty values (e.g., `- key: -`). If an item exists in the source, it must be translated, not left as a placeholder.
 
 3. **PRESERVE MARKDOWN TABLES**: Do not change the structure of Markdown tables. Keep the columns and rows exactly as provided.
+
+4. **PRESERVE DETAILS BLOCKS**: When content appears inside `<details>` blocks, do not add or remove any indentation. Preserve the exact leading whitespace of every line exactly as it appears in the source. For example, if the source has:
+   ```
+   <details>
+   <summary>Title</summary>
+
+   - Item one
+   - Item two
+
+   </details>
+   ```
+   The translation must keep the same indentation — `- Item one` must remain `- Item one`, not `  - Item one` or `    - Item one`.
+

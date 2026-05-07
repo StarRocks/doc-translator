@@ -331,3 +331,11 @@ insert into external_t values ('2020-10-11', 1, 1, 'hello', '2020-10-11 10:00:00
 insert into external_t select * from other_table;
 ~~~
 
+## References
+
+- [SHOW CREATE TABLE](SHOW_CREATE_TABLE.md)
+- [SHOW TABLES](SHOW_TABLES.md)
+- [USE](../Database/USE.md)
+- [ALTER TABLE](ALTER_TABLE.md)
+- [DROP TABLE](DROP_TABLE.md)
+

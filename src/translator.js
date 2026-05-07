@@ -193,7 +193,7 @@ class MarkdownTranslator {
                 headings += 1;
             }
 
-            if (!inCodeBlock && /^\s{0,3}[-*]\s+\S/.test(line)) {
+            if (!inCodeBlock && /^\s*[-*]\s+\S/.test(line)) {
                 unorderedListItems += 1;
             }
         }
