@@ -740,6 +740,40 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return output;
     }
 
+    warnTableColumnMismatches(content, inputPath, outputPath) {
+        const lines = content.split('\n');
+        let expectedCols = null;
+        let warned = false;
+
+        lines.forEach((line, i) => {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('|')) {
+                expectedCols = null;
+                return;
+            }
+            if (/^\|([\s:]*-[\s:-]*\|)+$/.test(trimmed)) {
+                expectedCols = (trimmed.match(/(?<!\\)\|/g) || []).length - 1;
+                return;
+            }
+            const cells = trimmed.slice(1, -1).split(/(?<!\\)\|/);
+            if (expectedCols === null) {
+                expectedCols = cells.length;
+                return;
+            }
+            if (cells.length > expectedCols) {
+                console.warn(chalk.yellow(
+                    `[table] Extra column at line ${i + 1} of ${outputPath} ` +
+                    `(expected ${expectedCols}, got ${cells.length}). ` +
+                    `Review manually: node ~/GitHub/markdown-translator/bin/cli.js translate ` +
+                    `-s en -i ${inputPath} -l ja -o ${outputPath}`
+                ));
+                warned = true;
+            }
+        });
+
+        return warned;
+    }
+
     restoreInlineCodePlaceholders(content, inlineCodePlaceholders) {
         let output = content;
 
@@ -1017,6 +1051,8 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             if (finalMismatches.length > 0) {
                 throw new Error(`Final translation completeness check failed: ${finalMismatches.join('; ')}`);
             }
+
+            this.warnTableColumnMismatches(translated, inputPath, outputPath);
 
             await fs.ensureDir(path.dirname(outputPath));
             await fs.writeFile(outputPath, translated, 'utf8');
