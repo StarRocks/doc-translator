@@ -18,9 +18,10 @@ ${never_translate}
 - Do not add extra blank lines.
 - Do not remove or translate import statements.
 - The results must be valid Docusaurus mdx
-- It is important to maintain the accuracy of the contents but we 
+- It is important to maintain the accuracy of the contents but we
   don't want the output to read like it's been translated. So instead
   of translating word by word, prioritize naturalness and ease of communication.
+- When a sentence contains bold-marked words (e.g., `you do **not** need to`), translate the entire sentence naturally first, then apply bold to the translated equivalent of the bolded word. Do not translate the bolded word in isolation.
 - In code blocks, **never** translate anything
 
 ## Formatting Rules
@@ -31,6 +32,7 @@ ${never_translate}
 - Markdown links must always have a space before the opening square bracket `[`. If there is a missing space add it.
 - Markdown links must always have a space after the closing parens `)`. If there is a missing space add it.
 - Be careful with `<Tabs>` and `<TabItem>` formatting. Respect spacing and newlines around these important constructs. Especially after lists, be sure to keep the same spacing. There must be a double newline after the list.
+- **Do NOT indent content inside `<TabItem>` blocks.** Preserve the exact leading whitespace of every line inside a `<TabItem>` exactly as it appears in the source. For example, if the source has `### Heading` inside a `<TabItem>`, it must remain `### Heading` in the translation — not `    ### Heading`.
 - For inline formatting (italic, bold, strikethrough, inline code) in Japanese, consider adding spaces before and after when applying to part of a word/phrase. For example "_A_ and _B_" should be translated as "_A_ と _B_", not "_A_と_B_". Without spaces, the translated markdown does not work.
 - Add a space when switching between alphabets and Japanese characters including Kanji, Hiragana, and Katagana.
 - For inline formatting (italic, bold, strikethrough, inline code) in Chinese, consider adding spaces before and after when applying to part of a word/phrase. For example "_A_ and _B_" should be translated as "_A_ 和 _B_", not "_A_和_B_". Without spaces, the translated markdown does not work.
@@ -68,6 +70,8 @@ ${never_translate}
    - Do NOT create placeholder list items with empty values (e.g., `- key: -`). If an item exists in the source, it must be translated, not left as a placeholder.
 
 3. **PRESERVE MARKDOWN TABLES**: Do not change the structure of Markdown tables. Keep the columns and rows exactly as provided.
+   - Each row must have exactly the same number of `|`-separated cells as the header row.
+   - Do NOT insert `|` characters inside cell content — a `|` inside a cell is interpreted as a column separator and will break the table structure. If a cell contains a link followed by more text, keep it all in the same cell: `| text [link](url) more text |`, never `| text |[link](url) more text |`.
 
 4. **PRESERVE DETAILS BLOCKS**: When content appears inside `<details>` blocks, do not add or remove any indentation. Preserve the exact leading whitespace of every line exactly as it appears in the source. For example, if the source has:
    ```

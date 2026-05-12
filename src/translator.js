@@ -189,7 +189,7 @@ class MarkdownTranslator {
                 continue;
             }
 
-            if (!inCodeBlock && /^\s{0,3}#{1,6}\s+\S/.test(line)) {
+            if (!inCodeBlock && /^\s*#{1,6}\s+\S/.test(line)) {
                 headings += 1;
             }
 
