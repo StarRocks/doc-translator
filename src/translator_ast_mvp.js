@@ -804,6 +804,64 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return warned;
     }
 
+    fixAdmonitionIndentation(content) {
+        const lines = content.split('\n');
+        const result = [];
+        const admonitionStack = [];
+        let inCodeBlock = false;
+        let codeFenceChar = null;
+        let codeFenceLen = 0;
+
+        for (const line of lines) {
+            const fenceMatch = line.match(/^\s*([`~]{3,})/);
+            if (fenceMatch) {
+                const fenceChar = fenceMatch[1][0];
+                const fenceLen = fenceMatch[1].length;
+                if (!inCodeBlock) {
+                    inCodeBlock = true;
+                    codeFenceChar = fenceChar;
+                    codeFenceLen = fenceLen;
+                } else if (fenceChar === codeFenceChar && fenceLen >= codeFenceLen) {
+                    inCodeBlock = false;
+                    codeFenceChar = null;
+                    codeFenceLen = 0;
+                }
+                result.push(line);
+                continue;
+            }
+
+            if (inCodeBlock) {
+                result.push(line);
+                continue;
+            }
+
+            const openMatch = line.match(/^(\s*):::\w/);
+            const closeMatch = !openMatch && line.match(/^(\s*):::[ \t]*$/);
+
+            if (openMatch) {
+                admonitionStack.push(openMatch[1].length);
+                result.push(line);
+            } else if (closeMatch && admonitionStack.length > 0) {
+                const expectedIndent = admonitionStack[admonitionStack.length - 1];
+                const actualIndent = closeMatch[1].length;
+                result.push(actualIndent < expectedIndent
+                    ? `${' '.repeat(expectedIndent)}:::`
+                    : line);
+                admonitionStack.pop();
+            } else if (admonitionStack.length > 0 && line.trim() !== '') {
+                const expectedIndent = admonitionStack[admonitionStack.length - 1];
+                const actualIndent = line.length - line.trimStart().length;
+                result.push(actualIndent < expectedIndent
+                    ? `${' '.repeat(expectedIndent)}${line.trimStart()}`
+                    : line);
+            } else {
+                result.push(line);
+            }
+        }
+
+        return result.join('\n');
+    }
+
     restoreInlineCodePlaceholders(content, inlineCodePlaceholders) {
         let output = content;
 
@@ -1083,6 +1141,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
 
         let translatedContent = this.restoreTranslatedContent(skeleton, restoredNeverTranslateEntries);
         translatedContent = this.restoreInlineCodePlaceholders(translatedContent, inlineCodePlaceholders);
+        translatedContent = this.fixAdmonitionIndentation(translatedContent);
         if (this.isEnglishTarget(targetLanguage)) {
             return this.normalizeEnglishInlineCodeSpacing(translatedContent);
         }

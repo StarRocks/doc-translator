@@ -71,9 +71,28 @@ ${never_translate}
 
 3. **PRESERVE MARKDOWN TABLES**: Do not change the structure of Markdown tables. Keep the columns and rows exactly as provided.
    - Each row must have exactly the same number of `|`-separated cells as the header row.
+   - Every table row must begin AND end with a `|` character. For example: `| cell1 | cell2 |` — never omit the trailing `|`.
    - Do NOT insert `|` characters inside cell content — a `|` inside a cell is interpreted as a column separator and will break the table structure. If a cell contains a link followed by more text, keep it all in the same cell: `| text [link](url) more text |`, never `| text |[link](url) more text |`.
 
-4. **PRESERVE DETAILS BLOCKS**: When content appears inside `<details>` blocks, do not add or remove any indentation. Preserve the exact leading whitespace of every line exactly as it appears in the source. For example, if the source has:
+4. **PRESERVE ADMONITION BLOCK INDENTATION**: When a `:::note`, `:::tip`, `:::important`, `:::caution`, or `:::warning` block is indented (e.g., because it appears inside a list item), ALL content inside the block — including the closing `:::` — must preserve the same leading indentation as the opening `:::`. For example, if the source has:
+   ```
+   4. Step four.
+
+      :::note
+      Some note text.
+      :::
+   ```
+   The translation must keep the same indentation for the content and the closing `:::`:
+   ```
+   4. ステップ4。
+
+      :::note
+      注意事項のテキスト。
+      :::
+   ```
+   Never remove leading spaces from content or the closing `:::` of an indented admonition block.
+
+5. **PRESERVE DETAILS BLOCKS**: When content appears inside `<details>` blocks, do not add or remove any indentation. Preserve the exact leading whitespace of every line exactly as it appears in the source. For example, if the source has:
    ```
    <details>
    <summary>Title</summary>
