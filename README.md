@@ -1,6 +1,6 @@
 # Markdown Translator
 
-A powerful command-line tool that uses Google Gemini AI to translate markdown and MDX files from English to any specified language while preserving formatting and structure.
+A powerful command-line tool that uses Claude AI to translate markdown and MDX files from English to any specified language while preserving formatting and structure.
 
 ## Usage at StarRocks
 
@@ -20,7 +20,7 @@ This code and most of the README are from the team at [PlayCanvas](https://githu
   -o, --output <file>     Output file path (for single file translation)
   -d, --output-dir <dir>  Output directory (for batch translation or single
                           file)
-  -k, --key <apikey>      Google Gemini API key (or set GEMINI_API_KEY env var)
+  -k, --key <apikey>      Anthropic API key (or set ANTHROPIC_API_KEY env var)
   --flat                  Use flat structure in output directory (default:
                           preserve structure)
   --suffix <suffix>       Custom suffix for output files (default: language
@@ -33,7 +33,7 @@ This code and most of the README are from the team at [PlayCanvas](https://githu
 
 The translator now uses the AST pipeline by default.
 
-When `--trace` is enabled, the tool logs one JSON trace record per ID and includes the full `sourceText` and `translatedText` values. The only masking applied is replacing any accidental `GEMINI_API_KEY` occurrences with `***`.
+When `--trace` is enabled, the tool logs one JSON trace record per ID and includes the full `sourceText` and `translatedText` values. The only masking applied is replacing any accidental `ANTHROPIC_API_KEY` occurrences with `***`.
 
 ### Interpreting AST parse failures
 
@@ -53,10 +53,10 @@ How to read the outcome:
 ## Quick Start
 
 1. cd into the root of this repo
-2. Get a Gemini API Key
-3. Export your Gemini API Key like so:
+2. Get an Anthropic API Key
+3. Export your Anthropic API Key like so:
    ```sh
-   export GEMINI_API_KEY="<your key here>"
+   export ANTHROPIC_API_KEY="<your key here>"
    ```
 4. Install the prerequisites:
    ```sh
@@ -74,8 +74,8 @@ How to read the outcome:
    
 ## Example use on your workstation with the StarRocks repo
    ```sh
-   # Export your Gemini API key
-   export GEMINI_API_KEY="AIxxxxxxxxxxxxxxxx"
+   # Export your Anthropic API key
+   export ANTHROPIC_API_KEY="sk-ant-xxxxxxxxxxxxxxxx"
    
    # in the markdown-translator repo directory install the translator globally on your system:
    npm install
@@ -108,14 +108,14 @@ How to read the outcome:
 - 🏗️ **Structure preservation** - Maintain directory structure or flatten output as needed
 - 📊 **Progress tracking** - Real-time progress indication with spinners for single files and batches
 - 🎨 **Beautiful CLI** - Colorful, user-friendly command-line interface
-- ⚡ **Fast processing** - Optimized for speed with high-performance Gemini model
+- ⚡ **Fast processing** - Optimized for speed with high-performance Claude model
 
 ## Installation
 
 ### Prerequisites
 
 - Node.js 16.0.0 or higher
-- Google Gemini API key ([Get one here](https://aistudio.google.com/app/apikey))
+- Anthropic API key ([Get one here](https://console.anthropic.com/))
 
 > **Note**: This tool uses ES modules (ESM) and requires Node.js 16+ for full compatibility.
 
@@ -139,9 +139,9 @@ node bin/cli.js
 
 ## Setup
 
-### 1. Get Google Gemini API Key
+### 1. Get Anthropic API Key
 
-1. Visit [Google AI Studio](https://aistudio.google.com/app/apikey)
+1. Visit [Anthropic Console](https://console.anthropic.com/)
 2. Create a new API key
 3. Copy the generated key
 
@@ -150,7 +150,7 @@ node bin/cli.js
 **Option A: Environment Variable (Recommended)**
 
 ```bash
-export GEMINI_API_KEY="your-api-key-here"
+export ANTHROPIC_API_KEY="your-api-key-here"
 ```
 
 **Option B: Command Line Argument**
@@ -208,7 +208,7 @@ Options:
   -l, --language <lang>    Target language (required)
   -o, --output <file>      Output file path (for single file translation)
   -d, --output-dir <dir>   Output directory (for batch translation or single file)
-  -k, --key <apikey>       Google Gemini API key (optional)
+  -k, --key <apikey>       Anthropic API key (optional)
   --flat                   Use flat structure in output directory (default: preserve structure)
   --suffix <suffix>        Custom suffix for output files (default: language name)
    --log-chunk-metadata     Log API metadata for each chunk
@@ -377,7 +377,7 @@ The tool provides detailed progress feedback for both single file and batch proc
 ```
 ╔═══════════════════════════════════════╗
 ║        Markdown Translator            ║
-║     Powered by Google Gemini AI       ║
+║       Powered by Claude AI            ║
 ╚═══════════════════════════════════════╝
 
 📋 Translation Details:
@@ -400,7 +400,7 @@ The tool provides detailed progress feedback for both single file and batch proc
 ```
 ╔═══════════════════════════════════════╗
 ║        Markdown Translator            ║
-║     Powered by Google Gemini AI       ║
+║       Powered by Claude AI            ║
 ╚═══════════════════════════════════════╝
 
 📋 Batch Translation Details:
@@ -454,7 +454,7 @@ This project uses **ES modules (ESM)** for modern JavaScript development:
 
 ### Key Dependencies
 
-- `@google/generative-ai` - Google Gemini AI SDK
+- `@anthropic-ai/sdk` - Anthropic Claude AI SDK
 - `commander` - Command-line interface framework
 - `chalk` - Terminal styling
 - `ora` - Progress spinners
@@ -477,8 +477,8 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ### API Key Issues
 
 - Ensure your API key is valid and active
-- Check that you have sufficient quota in your Google Cloud account
-- Verify the API key has access to the Gemini API
+- Check that you have sufficient quota in your Anthropic account
+- Verify the API key is active in the Anthropic Console
 
 ### Large File Processing
 

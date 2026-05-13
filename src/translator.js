@@ -1,6 +1,6 @@
 import path from 'path';
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import Anthropic from '@anthropic-ai/sdk';
 import chalk from 'chalk';
 import fs from 'fs-extra';
 import { glob } from 'glob';
@@ -8,20 +8,14 @@ import { glob } from 'glob';
 class MarkdownTranslator {
     constructor(apiKey) {
         if (!apiKey) {
-            throw new Error('Google Gemini API key is required');
+            throw new Error('Anthropic API key is required');
         }
 
         this.apiKey = apiKey;
 
-        this.genAI = new GoogleGenerativeAI(apiKey);
+        this.client = new Anthropic({ apiKey });
         this.neverTranslateTerms = [];
-        this.modelName = 'gemini-2.5-flash';
-        this.model = this.genAI.getGenerativeModel({
-            model: this.modelName,
-            generationConfig: {
-                temperature: 0
-            }
-        });
+        this.modelName = 'claude-sonnet-4-6';
 
         console.log(chalk.gray(`Using model: ${this.modelName} (temperature: 0)`));
 
@@ -243,14 +237,26 @@ class MarkdownTranslator {
     }
 
     extractChunkMetadata(response) {
-        const candidate = response?.candidates?.[0];
         return {
-            finishReason: candidate?.finishReason || null,
-            safetyRatings: candidate?.safetyRatings || null,
-            promptFeedback: response?.promptFeedback || null,
-            usageMetadata: response?.usageMetadata || null,
-            candidates: response?.candidates?.length ?? null
+            finishReason: response?.stop_reason || null,
+            safetyRatings: null,
+            promptFeedback: null,
+            usageMetadata: response?.usage || null,
+            candidates: null
         };
+    }
+
+    async callModel(userPrompt, systemPrompt) {
+        const params = {
+            model: this.modelName,
+            max_tokens: 8096,
+            temperature: 0,
+            messages: [{ role: 'user', content: userPrompt }]
+        };
+        if (systemPrompt) {
+            params.system = systemPrompt;
+        }
+        return await this.client.messages.create(params);
     }
 
     translateFile() {

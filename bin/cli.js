@@ -16,13 +16,13 @@ const program = new Command();
 const banner = `
 ╔═══════════════════════════════════════╗
 ║        Markdown Translator            ║
-║     Powered by Google Gemini AI       ║
+║       Powered by Claude AI            ║
 ╚═══════════════════════════════════════╝
 `;
 
 program
 .name('md-translate')
-.description('Translate markdown files using Google Gemini AI')
+.description('Translate markdown files using Claude AI')
 .version('1.0.0');
 
 program
@@ -33,7 +33,7 @@ program
 .option('-s, --source <lang>', 'Source language (default: English)')
 .option('-o, --output <file>', 'Output file path (for single file translation)')
 .option('-d, --output-dir <dir>', 'Output directory (for batch translation or single file)')
-.option('-k, --key <apikey>', 'Google Gemini API key (or set GEMINI_API_KEY env var)')
+.option('-k, --key <apikey>', 'Anthropic API key (or set ANTHROPIC_API_KEY env var)')
 .option('--flat', 'Use flat structure in output directory (default: preserve structure)')
 .option('--suffix <suffix>', 'Custom suffix for output files (default: language name)')
 .option('--log-chunk-metadata', 'Log API metadata for each chunk')
@@ -43,11 +43,10 @@ program
 
     try {
         // Get API key from options or environment
-        const apiKey = options.key || process.env.GEMINI_API_KEY;
+        const apiKey = options.key || process.env.ANTHROPIC_API_KEY;
         if (!apiKey) {
-            console.error(chalk.red('❌ Error: Google Gemini API key is required.'));
-            console.log(chalk.yellow('Set GEMINI_API_KEY environment variable or use --key option'));
-            console.log(chalk.blue('Get your API key from: https://aistudio.google.com/app/apikey'));
+            console.error(chalk.red('❌ Error: Anthropic API key is required.'));
+            console.log(chalk.yellow('Set ANTHROPIC_API_KEY environment variable or use --key option'));
             process.exit(1);
         }
 
@@ -223,9 +222,8 @@ program
 
     } catch (error) {
         console.error(chalk.red(`\n❌ Error: ${error.message}`));
-        if (error.message.includes('API_KEY_INVALID')) {
-            console.log(chalk.yellow('Please check your Google Gemini API key'));
-            console.log(chalk.blue('Get your API key from: https://aistudio.google.com/app/apikey'));
+        if (error.message.includes('API_KEY_INVALID') || error.message.includes('authentication')) {
+            console.log(chalk.yellow('Please check your Anthropic API key'));
         }
         process.exit(1);
     }
@@ -254,22 +252,22 @@ program
         console.log(row);
     }
 
-    console.log(chalk.yellow('\n💡 Tip: You can also use any other language name that Gemini supports'));
+    console.log(chalk.yellow('\n💡 Tip: You can also use any other language name that Claude supports'));
 });
 
 program
 .command('setup')
-.description('Setup guide for Google Gemini API key')
+.description('Setup guide for Anthropic API key')
 .action(() => {
     console.log(chalk.cyan(banner));
     console.log(chalk.blue('🔧 Setup Guide:'));
     console.log('');
-    console.log(chalk.yellow('1. Get your Google Gemini API key:'));
-    console.log(chalk.gray('   Visit: https://aistudio.google.com/app/apikey'));
+    console.log(chalk.yellow('1. Get your Anthropic API key:'));
+    console.log(chalk.gray('   Visit: https://console.anthropic.com/'));
     console.log('');
     console.log(chalk.yellow('2. Set your API key (choose one):'));
     console.log(chalk.gray('   Option A - Environment variable:'));
-    console.log(chalk.white('     export GEMINI_API_KEY="your-api-key-here"'));
+    console.log(chalk.white('     export ANTHROPIC_API_KEY="your-api-key-here"'));
     console.log('');
     console.log(chalk.gray('   Option B - Command line argument:'));
     console.log(chalk.white('     md-translate translate -i file.md -l Spanish --key your-api-key-here'));

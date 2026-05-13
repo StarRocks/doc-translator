@@ -440,7 +440,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         const systemPrompt = this.renderSystemPrompt(sourceLanguage, targetLanguage);
         const payload = JSON.stringify(items);
 
-        const taskPrompt =
+        const userPrompt =
             `Translate each item's text from ${sourceLanguage} to ${targetLanguage}.\n\n` +
             'Response format requirements:\n' +
             '1) Return ONLY a JSON array.\n' +
@@ -452,16 +452,15 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             '7) Tokens matching __MTX_NEVER_<number>__ are protected placeholders for never-translate terms. Keep them exactly unchanged. Do not translate, split, remove, or rename them.\n\n' +
             `Input JSON:\n${payload}`;
 
-        if (systemPrompt) {
-            return `${systemPrompt}\n\n### TASK ###\n${taskPrompt}`;
-        }
-
-        return taskPrompt;
+        return { system: systemPrompt || null, user: userPrompt };
     }
 
     createAstTranslationRepairPrompt(items, targetLanguage, sourceLanguage, parseErrorMessage) {
-        const basePrompt = this.createAstTranslationPrompt(items, targetLanguage, sourceLanguage);
-        return `${basePrompt}\n\nYour previous response could not be parsed as JSON (${parseErrorMessage}). Return STRICT valid JSON only.`;
+        const { system, user } = this.createAstTranslationPrompt(items, targetLanguage, sourceLanguage);
+        return {
+            system,
+            user: `${user}\n\nYour previous response could not be parsed as JSON (${parseErrorMessage}). Return STRICT valid JSON only.`
+        };
     }
 
     parseJsonArrayFromModelText(text) {
@@ -539,32 +538,32 @@ class AstMarkdownTranslator extends MarkdownTranslator {
     }
 
     async requestParsedAstItems(items, targetLanguage, sourceLanguage) {
-        const prompt = this.createAstTranslationPrompt(items, targetLanguage, sourceLanguage);
-        const result = await this.model.generateContent(prompt);
-        const response = await result.response;
+        const { system, user } = this.createAstTranslationPrompt(items, targetLanguage, sourceLanguage);
+        const response = await this.callModel(user, system);
         const metadata = this.extractChunkMetadata(response);
+        const text = response.content[0].text;
 
         try {
             return {
-                translatedItems: this.parseJsonArrayFromModelText(response.text()),
+                translatedItems: this.parseJsonArrayFromModelText(text),
                 metadata,
                 repairMetadata: null,
                 parseWarnings: []
             };
         } catch (initialParseError) {
-            const repairPrompt = this.createAstTranslationRepairPrompt(
+            const { system: repairSystem, user: repairUser } = this.createAstTranslationRepairPrompt(
                 items,
                 targetLanguage,
                 sourceLanguage,
                 initialParseError.message
             );
-            const repairResult = await this.model.generateContent(repairPrompt);
-            const repairResponse = await repairResult.response;
+            const repairResponse = await this.callModel(repairUser, repairSystem);
             const repairMetadata = this.extractChunkMetadata(repairResponse);
+            const repairText = repairResponse.content[0].text;
 
             try {
                 return {
-                    translatedItems: this.parseJsonArrayFromModelText(repairResponse.text()),
+                    translatedItems: this.parseJsonArrayFromModelText(repairText),
                     metadata,
                     repairMetadata,
                     parseWarnings: [`initial parse failed: ${initialParseError.message}`]
