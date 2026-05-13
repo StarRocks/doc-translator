@@ -69,7 +69,8 @@ class AstMarkdownTranslator extends MarkdownTranslator {
 
         let output = text;
         const sortedTerms = [...this.neverTranslateTerms].sort((a, b) => b.length - a.length);
-        const registeredPlaceholders = new Set(replacements.map(r => r.placeholder));
+        const termToPlaceholder = new Map(replacements.map(r => [r.value, r.placeholder]));
+        const placeholderToTerm = new Map(replacements.map(r => [r.placeholder, r.value]));
 
         for (const term of sortedTerms) {
             if (!term) {
@@ -78,14 +79,34 @@ class AstMarkdownTranslator extends MarkdownTranslator {
 
             const escapedTerm = this.escapeForRegex(term);
             const pattern = new RegExp(escapedTerm, 'g');
-            const placeholder = this.buildNeverTranslatePlaceholder(term);
 
-            if (!registeredPlaceholders.has(placeholder)) {
-                replacements.push({ placeholder, value: term });
-                registeredPlaceholders.add(placeholder);
+            // Resolve placeholder, detecting hash collisions
+            let placeholder = termToPlaceholder.get(term);
+            if (!placeholder) {
+                placeholder = this.buildNeverTranslatePlaceholder(term);
+                if (placeholderToTerm.has(placeholder) && placeholderToTerm.get(placeholder) !== term) {
+                    let counter = 2;
+                    const base = placeholder.slice(0, -2);
+                    while (placeholderToTerm.has(`${base}_${counter}__`)) {
+                        counter++;
+                    }
+                    placeholder = `${base}_${counter}__`;
+                }
             }
 
-            output = output.replace(pattern, placeholder);
+            // Only register if term actually appears in this text
+            const replaced = output.replace(pattern, placeholder);
+            if (replaced === output) {
+                continue;
+            }
+
+            if (!termToPlaceholder.has(term)) {
+                termToPlaceholder.set(term, placeholder);
+                placeholderToTerm.set(placeholder, term);
+                replacements.push({ placeholder, value: term });
+            }
+
+            output = replaced;
         }
 
         return output;
@@ -572,7 +593,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         const { system, user } = this.createAstTranslationPrompt(items, targetLanguage, sourceLanguage);
         const response = await this.callModel(user, system);
         const metadata = this.extractChunkMetadata(response);
-        const text = response.content[0].text;
+        const text = this.getResponseText(response);
 
         try {
             return {
@@ -590,7 +611,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             );
             const repairResponse = await this.callModel(repairUser, repairSystem);
             const repairMetadata = this.extractChunkMetadata(repairResponse);
-            const repairText = repairResponse.content[0].text;
+            const repairText = this.getResponseText(repairResponse);
 
             try {
                 return {
@@ -1106,7 +1127,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                     `Input JSON:\n${JSON.stringify(corruptedEntries)}`;
 
                 const retryResponse = await this.callModel(retryUserPrompt, system);
-                const retryText = retryResponse.content[0].text;
+                const retryText = this.getResponseText(retryResponse);
 
                 try {
                     const retryTranslatedItems = this.parseJsonArrayFromModelText(retryText);

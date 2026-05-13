@@ -33,7 +33,7 @@ This code and most of the README are from the team at [PlayCanvas](https://githu
 
 The translator now uses the AST pipeline by default.
 
-When `--trace` is enabled, the tool logs one JSON trace record per ID and includes the full `sourceText` and `translatedText` values. The only masking applied is replacing any accidental `ANTHROPIC_API_KEY` occurrences with `***`.
+When `--trace` is enabled, the tool logs one JSON trace record per ID and includes the full `sourceText` and `translatedText` values. The only masking applied is replacing occurrences of the actual API key value with `***`.
 
 ### Interpreting AST parse failures
 

@@ -246,6 +246,13 @@ class MarkdownTranslator {
         };
     }
 
+    getResponseText(response) {
+        return response.content
+            .filter(block => block.type === 'text')
+            .map(block => block.text)
+            .join('');
+    }
+
     async callModel(userPrompt, systemPrompt) {
         const params = {
             model: this.modelName,
