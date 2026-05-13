@@ -21,7 +21,7 @@ const banner = `
 `;
 
 program
-.name('md-translate')
+.name('doc-translate')
 .description('Translate markdown files using Claude AI')
 .version('1.0.0');
 
@@ -270,12 +270,12 @@ program
     console.log(chalk.white('     export ANTHROPIC_API_KEY="your-api-key-here"'));
     console.log('');
     console.log(chalk.gray('   Option B - Command line argument:'));
-    console.log(chalk.white('     md-translate translate -i file.md -l Spanish --key your-api-key-here'));
+    console.log(chalk.white('     doc-translate translate -i file.md -l Spanish --key your-api-key-here'));
     console.log('');
     console.log(chalk.yellow('3. Start translating:'));
-    console.log(chalk.white('     md-translate translate -i README.md -l Spanish'));
+    console.log(chalk.white('     doc-translate translate -i README.md -l Spanish'));
     console.log('');
-    console.log(chalk.blue('📚 For more help: md-translate --help'));
+    console.log(chalk.blue('📚 For more help: doc-translate --help'));
 });
 
 // Error handling

@@ -37,12 +37,17 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return `__MTX_CODE_${id}__`;
     }
 
-    buildNeverTranslatePlaceholder(id) {
-        return `__MTX_NEVER_${id}__`;
+    buildNeverTranslatePlaceholder(term) {
+        let hash = 0;
+        for (let i = 0; i < term.length; i++) {
+            hash = ((hash << 5) - hash) + term.charCodeAt(i);
+            hash |= 0;
+        }
+        return `__MTX_NEVER_${Math.abs(hash).toString(16).padStart(8, '0')}__`;
     }
 
     isFullyProtected(text) {
-        return typeof text === 'string' && /^(\s*__MTX_NEVER_\d+__\s*)+$/.test(text);
+        return typeof text === 'string' && /^(\s*__MTX_NEVER_[0-9a-f]+__\s*)+$/.test(text);
     }
 
     isSkippableTextParent(parentType) {
@@ -64,6 +69,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
 
         let output = text;
         const sortedTerms = [...this.neverTranslateTerms].sort((a, b) => b.length - a.length);
+        const registeredPlaceholders = new Set(replacements.map(r => r.placeholder));
 
         for (const term of sortedTerms) {
             if (!term) {
@@ -72,15 +78,40 @@ class AstMarkdownTranslator extends MarkdownTranslator {
 
             const escapedTerm = this.escapeForRegex(term);
             const pattern = new RegExp(escapedTerm, 'g');
+            const placeholder = this.buildNeverTranslatePlaceholder(term);
 
-            output = output.replace(pattern, () => {
-                const placeholder = this.buildNeverTranslatePlaceholder(replacements.length + 1);
+            if (!registeredPlaceholders.has(placeholder)) {
                 replacements.push({ placeholder, value: term });
-                return placeholder;
-            });
+                registeredPlaceholders.add(placeholder);
+            }
+
+            output = output.replace(pattern, placeholder);
         }
 
         return output;
+    }
+
+    validateNeverTranslatePlaceholders(translatedEntries, replacements) {
+        const validPlaceholders = new Set(replacements.map(r => r.placeholder));
+        const pattern = /__MTX_NEVER_\w+__/g;
+        const warnings = [];
+
+        for (const entry of translatedEntries) {
+            if (typeof entry.text !== 'string') {
+                continue;
+            }
+            const matches = entry.text.match(pattern);
+            if (!matches) {
+                continue;
+            }
+            for (const match of matches) {
+                if (!validPlaceholders.has(match)) {
+                    warnings.push(`entry id ${entry.id}: corrupted placeholder ${match}`);
+                }
+            }
+        }
+
+        return warnings;
     }
 
     protectNeverTranslateEntries(entries) {
@@ -449,7 +480,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             '4) Do not add or remove items.\n' +
             '5) Do not include explanations or markdown code fences.\n' +
             '6) Tokens matching __MTX_CODE_<number>__ are protected placeholders for inline code. Keep them exactly unchanged. Do not translate, split, remove, or rename them.\n' +
-            '7) Tokens matching __MTX_NEVER_<number>__ are protected placeholders for never-translate terms. Keep them exactly unchanged. Do not translate, split, remove, or rename them.\n\n' +
+            '7) Tokens matching __MTX_NEVER_<hexhash>__ (where <hexhash> is an 8-character hexadecimal string like __MTX_NEVER_3fa8c201__) are protected placeholders for never-translate terms. Copy each token character-for-character into your output. Do not alter, simplify, renumber, or replace the hex hash with any other value.\n\n' +
             `Input JSON:\n${payload}`;
 
         return { system: systemPrompt || null, user: userPrompt };
@@ -763,7 +794,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                 console.warn(chalk.yellow(
                     `[table] Extra column at line ${i + 1} of ${outputPath} ` +
                     `(expected ${expectedCols}, got ${cells.length}). ` +
-                    `Review manually: node ~/GitHub/markdown-translator/bin/cli.js translate ` +
+                    `Review manually: node ~/GitHub/doc-translator/bin/cli.js translate ` +
                     `-s en -i ${inputPath} -l ja -o ${outputPath}`
                 ));
                 warned = true;
@@ -988,6 +1019,62 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             `missing_id_retries=${missingIdRetryCount} ` +
             `fallback_chunks=${fallbackChunkCount} fallback_items=${fallbackItemCount}`)
         );
+
+        const neverTranslateWarnings = this.validateNeverTranslatePlaceholders(
+            translatedEntries,
+            neverTranslateReplacements
+        );
+
+        if (neverTranslateWarnings.length > 0) {
+            for (const warning of neverTranslateWarnings) {
+                console.warn(chalk.yellow(`[never-translate] ${warning}`));
+            }
+
+            const corruptedIds = new Set(
+                neverTranslateWarnings.map(w => parseInt(w.match(/entry id (\d+)/)?.[1], 10)).filter(Boolean)
+            );
+            const corruptedEntries = translatedEntries.filter(e => corruptedIds.has(e.id));
+
+            if (corruptedEntries.length > 0) {
+                console.log(chalk.yellow(`[never-translate] retrying ${corruptedEntries.length} entr${corruptedEntries.length === 1 ? 'y' : 'ies'} with corrupted placeholders`));
+                const validPlaceholders = neverTranslateReplacements.map(r => r.placeholder).join(', ');
+                const { system } = this.createAstTranslationPrompt([], targetLanguage, sourceLanguage);
+                const retryUserPrompt =
+                    `Translate each item's text from ${sourceLanguage} to ${targetLanguage}.\n\n` +
+                    'CRITICAL: The following tokens are protected placeholders that must be copied exactly as-is into your output:\n' +
+                    `${validPlaceholders}\n\n` +
+                    'Do not alter, simplify, renumber, or substitute these tokens in any way.\n\n' +
+                    'Response format: Return ONLY a JSON array. Keep each id exactly as-is. Do not add or remove items. Do not include explanations or markdown code fences.\n\n' +
+                    `Input JSON:\n${JSON.stringify(corruptedEntries)}`;
+
+                const retryResponse = await this.callModel(retryUserPrompt, system);
+                const retryText = retryResponse.content[0].text;
+
+                try {
+                    const retryTranslatedItems = this.parseJsonArrayFromModelText(retryText);
+                    const retryMerged = this.mergeAstTranslationItems(corruptedEntries, retryTranslatedItems);
+                    const retryWarnings = this.validateNeverTranslatePlaceholders(retryMerged.merged, neverTranslateReplacements);
+
+                    if (retryWarnings.length < neverTranslateWarnings.length) {
+                        const retryById = new Map(retryMerged.merged.map(e => [e.id, e.text]));
+                        for (let i = 0; i < translatedEntries.length; i++) {
+                            if (retryById.has(translatedEntries[i].id)) {
+                                translatedEntries[i] = { ...translatedEntries[i], text: retryById.get(translatedEntries[i].id) };
+                            }
+                        }
+                        const resolved = neverTranslateWarnings.length - retryWarnings.length;
+                        console.log(chalk.green(`[never-translate] retry resolved ${resolved}/${neverTranslateWarnings.length} corrupted placeholder${resolved === 1 ? '' : 's'}`));
+                        for (const w of retryWarnings) {
+                            console.warn(chalk.yellow(`[never-translate] still corrupted after retry: ${w}`));
+                        }
+                    } else {
+                        console.warn(chalk.yellow('[never-translate] retry did not improve placeholder fidelity, keeping original'));
+                    }
+                } catch {
+                    console.warn(chalk.yellow('[never-translate] retry response could not be parsed, keeping original'));
+                }
+            }
+        }
 
         const restoredNeverTranslateEntries = this.restoreNeverTranslateEntries(
             translatedEntries,

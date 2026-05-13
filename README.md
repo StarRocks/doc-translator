@@ -77,16 +77,16 @@ How to read the outcome:
    # Export your Anthropic API key
    export ANTHROPIC_API_KEY="sk-ant-xxxxxxxxxxxxxxxx"
    
-   # in the markdown-translator repo directory install the translator globally on your system:
+   # in the doc-translator repo directory install the translator globally on your system:
    npm install
    npm link
    
    # now in the starrocks/starrocks repo dir
    # view the options:
-   md-translate translate -h
+   doc-translate translate -h
 
    # Example, translate the English architecture doc to Japanese:
-   md-translate translate -s en -i docs/en/introduction/Architecture.md -l ja -o docs/ja/introduction/Architecture.md
+   doc-translate translate -s en -i docs/en/introduction/Architecture.md -l ja -o docs/ja/introduction/Architecture.md
    ```
 ## Example use in GitHub PRs
 
@@ -156,7 +156,7 @@ export ANTHROPIC_API_KEY="your-api-key-here"
 **Option B: Command Line Argument**
 
 ```bash
-md-translate translate -i file.md -l Spanish --key your-api-key-here
+doc-translate translate -i file.md -l Spanish --key your-api-key-here
 ```
 
 ## Usage
@@ -165,16 +165,16 @@ md-translate translate -i file.md -l Spanish --key your-api-key-here
 
 ```bash
 # Translate README.md to Spanish
-md-translate translate -i README.md -l Spanish
+doc-translate translate -i README.md -l Spanish
 
 # Translate with custom output file
-md-translate translate -i docs/guide.md -l French -o docs/guide_fr.md
+doc-translate translate -i docs/guide.md -l French -o docs/guide_fr.md
 
 # Translate using API key argument
-md-translate translate -i file.md -l German --key your-api-key
+doc-translate translate -i file.md -l German --key your-api-key
 
 # Translate with AST mode (default)
-md-translate translate -i examples/External_table.md -l Japanese
+doc-translate translate -i examples/External_table.md -l Japanese
 ```
 
 ### Batch Processing
@@ -183,16 +183,16 @@ The tool supports batch processing of multiple markdown files using glob pattern
 
 ```bash
 # Translate all .md files in current directory
-md-translate translate -i "*.md" -l Spanish -d ./spanish/
+doc-translate translate -i "*.md" -l Spanish -d ./spanish/
 
 # Translate all markdown files in docs folder and subfolders
-md-translate translate -i "docs/**/*.md" -l French -d ./translations/
+doc-translate translate -i "docs/**/*.md" -l French -d ./translations/
 
 # Batch translate with flat structure (no subdirectories)
-md-translate translate -i "content/**/*.md" -l German -d ./output/ --flat
+doc-translate translate -i "content/**/*.md" -l German -d ./output/ --flat
 
 # Batch translate with custom suffix
-md-translate translate -i "*.md" -l ja -d ./translated/ --suffix "ja"
+doc-translate translate -i "*.md" -l ja -d ./translated/ --suffix "ja"
 ```
 
 ### Available Commands
@@ -200,7 +200,7 @@ md-translate translate -i "*.md" -l ja -d ./translated/ --suffix "ja"
 #### `translate` - Translate a markdown or MDX file
 
 ```bash
-md-translate translate [options]
+doc-translate translate [options]
 
 Options:
   -i, --input <pattern>    Input file path or glob pattern (required)
@@ -218,19 +218,19 @@ Options:
 #### `languages` - List supported languages
 
 ```bash
-md-translate languages
+doc-translate languages
 ```
 
 #### `setup` - Show setup guide
 
 ```bash
-md-translate setup
+doc-translate setup
 ```
 
 #### `--help` - Show help
 
 ```bash
-md-translate --help
+doc-translate --help
 ```
 
 ## Supported Languages
@@ -252,7 +252,7 @@ The tool supports 40+ languages including:
 #### Example 1: Basic Translation
 
 ```bash
-md-translate translate -i README.md -l es
+doc-translate translate -i README.md -l es
 ```
 
 **Output**: Creates `README_spanish.md` with Spanish translation
@@ -260,7 +260,7 @@ md-translate translate -i README.md -l es
 #### Example 2: Custom Output Path
 
 ```bash
-md-translate translate -i docs/api.md -l fr -o docs/fr/api.md
+doc-translate translate -i docs/api.md -l fr -o docs/fr/api.md
 ```
 
 **Output**: Creates `docs/fr/api.md` with French translation
@@ -268,7 +268,7 @@ md-translate translate -i docs/api.md -l fr -o docs/fr/api.md
 #### Example 3: Using API Key Argument
 
 ```bash
-md-translate translate -i guide.md -l German --key AIzaSyC...
+doc-translate translate -i guide.md -l German --key AIzaSyC...
 ```
 
 #### Example 4: Large File Translation
@@ -276,7 +276,7 @@ md-translate translate -i guide.md -l German --key AIzaSyC...
 The tool automatically handles large files by splitting them into chunks:
 
 ```bash
-md-translate translate -i large-document.md -l ja
+doc-translate translate -i large-document.md -l ja
 ```
 
 ### Batch Translation
@@ -284,7 +284,7 @@ md-translate translate -i large-document.md -l ja
 #### Example 5: Translate All Markdown Files
 
 ```bash
-md-translate translate -i "*.md" -l Spanish -d ./spanish/
+doc-translate translate -i "*.md" -l Spanish -d ./spanish/
 ```
 
 **Output**: Translates all `.md` files in current directory to `./spanish/` folder
@@ -292,7 +292,7 @@ md-translate translate -i "*.md" -l Spanish -d ./spanish/
 #### Example 6: Recursive Translation with Structure Preservation
 
 ```bash
-md-translate translate -i "docs/**/*.md" -l French -d ./translations/
+doc-translate translate -i "docs/**/*.md" -l French -d ./translations/
 ```
 
 **Output**: Translates all markdown files in `docs/` and preserves directory structure in `./translations/`
@@ -317,7 +317,7 @@ translations/
 #### Example 7: Flat Structure Batch Translation
 
 ```bash
-md-translate translate -i "content/**/*.md" -l German -d ./output/ --flat
+doc-translate translate -i "content/**/*.md" -l German -d ./output/ --flat
 ```
 
 **Output**: Translates all files but places them in a flat structure (no subdirectories)
@@ -342,7 +342,7 @@ output/
 #### Example 8: Custom Suffix
 
 ```bash
-md-translate translate -i "*.md" -l ja -d ./translated/ --suffix "ja"
+doc-translate translate -i "*.md" -l ja -d ./translated/ --suffix "ja"
 ```
 
 **Output**: Uses "ja" instead of "japanese" as the file suffix
@@ -434,7 +434,7 @@ The tool provides clear error messages for common issues:
 ### Project Structure
 
 ```
-markdown-translator/
+doc-translator/
 ├── bin/
 │   └── cli.js           # CLI entry point
 ├── src/
@@ -504,7 +504,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 If you encounter any issues or have questions:
 
 1. Check the troubleshooting section above
-2. Run `md-translate setup` for configuration help
+2. Run `doc-translate setup` for configuration help
 3. Create an issue on the project repository
 
 ---
