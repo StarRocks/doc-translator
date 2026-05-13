@@ -37,12 +37,17 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return `__MTX_CODE_${id}__`;
     }
 
-    buildNeverTranslatePlaceholder(id) {
-        return `__MTX_NEVER_${id}__`;
+    buildNeverTranslatePlaceholder(term) {
+        let hash = 0;
+        for (let i = 0; i < term.length; i++) {
+            hash = ((hash << 5) - hash) + term.charCodeAt(i);
+            hash |= 0;
+        }
+        return `__MTX_NEVER_${Math.abs(hash).toString(16).padStart(8, '0')}__`;
     }
 
     isFullyProtected(text) {
-        return typeof text === 'string' && /^(\s*__MTX_NEVER_\d+__\s*)+$/.test(text);
+        return typeof text === 'string' && /^(\s*__MTX_NEVER_[0-9a-f]+__\s*)+$/.test(text);
     }
 
     isSkippableTextParent(parentType) {
@@ -64,6 +69,8 @@ class AstMarkdownTranslator extends MarkdownTranslator {
 
         let output = text;
         const sortedTerms = [...this.neverTranslateTerms].sort((a, b) => b.length - a.length);
+        const termToPlaceholder = new Map(replacements.map(r => [r.value, r.placeholder]));
+        const placeholderToTerm = new Map(replacements.map(r => [r.placeholder, r.value]));
 
         for (const term of sortedTerms) {
             if (!term) {
@@ -73,14 +80,59 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             const escapedTerm = this.escapeForRegex(term);
             const pattern = new RegExp(escapedTerm, 'g');
 
-            output = output.replace(pattern, () => {
-                const placeholder = this.buildNeverTranslatePlaceholder(replacements.length + 1);
+            // Resolve placeholder, detecting hash collisions
+            let placeholder = termToPlaceholder.get(term);
+            if (!placeholder) {
+                placeholder = this.buildNeverTranslatePlaceholder(term);
+                if (placeholderToTerm.has(placeholder) && placeholderToTerm.get(placeholder) !== term) {
+                    let counter = 2;
+                    const base = placeholder.slice(0, -2);
+                    while (placeholderToTerm.has(`${base}_${counter}__`)) {
+                        counter++;
+                    }
+                    placeholder = `${base}_${counter}__`;
+                }
+            }
+
+            // Only register if term actually appears in this text
+            const replaced = output.replace(pattern, placeholder);
+            if (replaced === output) {
+                continue;
+            }
+
+            if (!termToPlaceholder.has(term)) {
+                termToPlaceholder.set(term, placeholder);
+                placeholderToTerm.set(placeholder, term);
                 replacements.push({ placeholder, value: term });
-                return placeholder;
-            });
+            }
+
+            output = replaced;
         }
 
         return output;
+    }
+
+    validateNeverTranslatePlaceholders(translatedEntries, replacements) {
+        const validPlaceholders = new Set(replacements.map(r => r.placeholder));
+        const pattern = /__MTX_NEVER_\w+__/g;
+        const warnings = [];
+
+        for (const entry of translatedEntries) {
+            if (typeof entry.text !== 'string') {
+                continue;
+            }
+            const matches = entry.text.match(pattern);
+            if (!matches) {
+                continue;
+            }
+            for (const match of matches) {
+                if (!validPlaceholders.has(match)) {
+                    warnings.push(`entry id ${entry.id}: corrupted placeholder ${match}`);
+                }
+            }
+        }
+
+        return warnings;
     }
 
     protectNeverTranslateEntries(entries) {
@@ -440,7 +492,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         const systemPrompt = this.renderSystemPrompt(sourceLanguage, targetLanguage);
         const payload = JSON.stringify(items);
 
-        const taskPrompt =
+        const userPrompt =
             `Translate each item's text from ${sourceLanguage} to ${targetLanguage}.\n\n` +
             'Response format requirements:\n' +
             '1) Return ONLY a JSON array.\n' +
@@ -449,19 +501,18 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             '4) Do not add or remove items.\n' +
             '5) Do not include explanations or markdown code fences.\n' +
             '6) Tokens matching __MTX_CODE_<number>__ are protected placeholders for inline code. Keep them exactly unchanged. Do not translate, split, remove, or rename them.\n' +
-            '7) Tokens matching __MTX_NEVER_<number>__ are protected placeholders for never-translate terms. Keep them exactly unchanged. Do not translate, split, remove, or rename them.\n\n' +
+            '7) Tokens matching __MTX_NEVER_<hexhash>__ (where <hexhash> is an 8-character hexadecimal string like __MTX_NEVER_3fa8c201__) are protected placeholders for never-translate terms. Copy each token character-for-character into your output. Do not alter, simplify, renumber, or replace the hex hash with any other value.\n\n' +
             `Input JSON:\n${payload}`;
 
-        if (systemPrompt) {
-            return `${systemPrompt}\n\n### TASK ###\n${taskPrompt}`;
-        }
-
-        return taskPrompt;
+        return { system: systemPrompt || null, user: userPrompt };
     }
 
     createAstTranslationRepairPrompt(items, targetLanguage, sourceLanguage, parseErrorMessage) {
-        const basePrompt = this.createAstTranslationPrompt(items, targetLanguage, sourceLanguage);
-        return `${basePrompt}\n\nYour previous response could not be parsed as JSON (${parseErrorMessage}). Return STRICT valid JSON only.`;
+        const { system, user } = this.createAstTranslationPrompt(items, targetLanguage, sourceLanguage);
+        return {
+            system,
+            user: `${user}\n\nYour previous response could not be parsed as JSON (${parseErrorMessage}). Return STRICT valid JSON only.`
+        };
     }
 
     parseJsonArrayFromModelText(text) {
@@ -539,32 +590,32 @@ class AstMarkdownTranslator extends MarkdownTranslator {
     }
 
     async requestParsedAstItems(items, targetLanguage, sourceLanguage) {
-        const prompt = this.createAstTranslationPrompt(items, targetLanguage, sourceLanguage);
-        const result = await this.model.generateContent(prompt);
-        const response = await result.response;
+        const { system, user } = this.createAstTranslationPrompt(items, targetLanguage, sourceLanguage);
+        const response = await this.callModel(user, system);
         const metadata = this.extractChunkMetadata(response);
+        const text = this.getResponseText(response);
 
         try {
             return {
-                translatedItems: this.parseJsonArrayFromModelText(response.text()),
+                translatedItems: this.parseJsonArrayFromModelText(text),
                 metadata,
                 repairMetadata: null,
                 parseWarnings: []
             };
         } catch (initialParseError) {
-            const repairPrompt = this.createAstTranslationRepairPrompt(
+            const { system: repairSystem, user: repairUser } = this.createAstTranslationRepairPrompt(
                 items,
                 targetLanguage,
                 sourceLanguage,
                 initialParseError.message
             );
-            const repairResult = await this.model.generateContent(repairPrompt);
-            const repairResponse = await repairResult.response;
+            const repairResponse = await this.callModel(repairUser, repairSystem);
             const repairMetadata = this.extractChunkMetadata(repairResponse);
+            const repairText = this.getResponseText(repairResponse);
 
             try {
                 return {
-                    translatedItems: this.parseJsonArrayFromModelText(repairResponse.text()),
+                    translatedItems: this.parseJsonArrayFromModelText(repairText),
                     metadata,
                     repairMetadata,
                     parseWarnings: [`initial parse failed: ${initialParseError.message}`]
@@ -764,7 +815,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                 console.warn(chalk.yellow(
                     `[table] Extra column at line ${i + 1} of ${outputPath} ` +
                     `(expected ${expectedCols}, got ${cells.length}). ` +
-                    `Review manually: node ~/GitHub/markdown-translator/bin/cli.js translate ` +
+                    `Review manually: node ~/GitHub/doc-translator/bin/cli.js translate ` +
                     `-s en -i ${inputPath} -l ja -o ${outputPath}`
                 ));
                 warned = true;
@@ -772,6 +823,64 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         });
 
         return warned;
+    }
+
+    fixAdmonitionIndentation(content) {
+        const lines = content.split('\n');
+        const result = [];
+        const admonitionStack = [];
+        let inCodeBlock = false;
+        let codeFenceChar = null;
+        let codeFenceLen = 0;
+
+        for (const line of lines) {
+            const fenceMatch = line.match(/^\s*([`~]{3,})/);
+            if (fenceMatch) {
+                const fenceChar = fenceMatch[1][0];
+                const fenceLen = fenceMatch[1].length;
+                if (!inCodeBlock) {
+                    inCodeBlock = true;
+                    codeFenceChar = fenceChar;
+                    codeFenceLen = fenceLen;
+                } else if (fenceChar === codeFenceChar && fenceLen >= codeFenceLen) {
+                    inCodeBlock = false;
+                    codeFenceChar = null;
+                    codeFenceLen = 0;
+                }
+                result.push(line);
+                continue;
+            }
+
+            if (inCodeBlock) {
+                result.push(line);
+                continue;
+            }
+
+            const openMatch = line.match(/^(\s*):::\w/);
+            const closeMatch = !openMatch && line.match(/^(\s*):::[ \t]*$/);
+
+            if (openMatch) {
+                admonitionStack.push(openMatch[1].length);
+                result.push(line);
+            } else if (closeMatch && admonitionStack.length > 0) {
+                const expectedIndent = admonitionStack[admonitionStack.length - 1];
+                const actualIndent = closeMatch[1].length;
+                result.push(actualIndent < expectedIndent
+                    ? `${' '.repeat(expectedIndent)}:::`
+                    : line);
+                admonitionStack.pop();
+            } else if (admonitionStack.length > 0 && line.trim() !== '') {
+                const expectedIndent = admonitionStack[admonitionStack.length - 1];
+                const actualIndent = line.length - line.trimStart().length;
+                result.push(actualIndent < expectedIndent
+                    ? `${' '.repeat(expectedIndent)}${line.trimStart()}`
+                    : line);
+            } else {
+                result.push(line);
+            }
+        }
+
+        return result.join('\n');
     }
 
     restoreInlineCodePlaceholders(content, inlineCodePlaceholders) {
@@ -990,6 +1099,62 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             `fallback_chunks=${fallbackChunkCount} fallback_items=${fallbackItemCount}`)
         );
 
+        const neverTranslateWarnings = this.validateNeverTranslatePlaceholders(
+            translatedEntries,
+            neverTranslateReplacements
+        );
+
+        if (neverTranslateWarnings.length > 0) {
+            for (const warning of neverTranslateWarnings) {
+                console.warn(chalk.yellow(`[never-translate] ${warning}`));
+            }
+
+            const corruptedIds = new Set(
+                neverTranslateWarnings.map(w => parseInt(w.match(/entry id (\d+)/)?.[1], 10)).filter(Boolean)
+            );
+            const corruptedEntries = translatedEntries.filter(e => corruptedIds.has(e.id));
+
+            if (corruptedEntries.length > 0) {
+                console.log(chalk.yellow(`[never-translate] retrying ${corruptedEntries.length} entr${corruptedEntries.length === 1 ? 'y' : 'ies'} with corrupted placeholders`));
+                const validPlaceholders = neverTranslateReplacements.map(r => r.placeholder).join(', ');
+                const { system } = this.createAstTranslationPrompt([], targetLanguage, sourceLanguage);
+                const retryUserPrompt =
+                    `Translate each item's text from ${sourceLanguage} to ${targetLanguage}.\n\n` +
+                    'CRITICAL: The following tokens are protected placeholders that must be copied exactly as-is into your output:\n' +
+                    `${validPlaceholders}\n\n` +
+                    'Do not alter, simplify, renumber, or substitute these tokens in any way.\n\n' +
+                    'Response format: Return ONLY a JSON array. Keep each id exactly as-is. Do not add or remove items. Do not include explanations or markdown code fences.\n\n' +
+                    `Input JSON:\n${JSON.stringify(corruptedEntries)}`;
+
+                const retryResponse = await this.callModel(retryUserPrompt, system);
+                const retryText = this.getResponseText(retryResponse);
+
+                try {
+                    const retryTranslatedItems = this.parseJsonArrayFromModelText(retryText);
+                    const retryMerged = this.mergeAstTranslationItems(corruptedEntries, retryTranslatedItems);
+                    const retryWarnings = this.validateNeverTranslatePlaceholders(retryMerged.merged, neverTranslateReplacements);
+
+                    if (retryWarnings.length < neverTranslateWarnings.length) {
+                        const retryById = new Map(retryMerged.merged.map(e => [e.id, e.text]));
+                        for (let i = 0; i < translatedEntries.length; i++) {
+                            if (retryById.has(translatedEntries[i].id)) {
+                                translatedEntries[i] = { ...translatedEntries[i], text: retryById.get(translatedEntries[i].id) };
+                            }
+                        }
+                        const resolved = neverTranslateWarnings.length - retryWarnings.length;
+                        console.log(chalk.green(`[never-translate] retry resolved ${resolved}/${neverTranslateWarnings.length} corrupted placeholder${resolved === 1 ? '' : 's'}`));
+                        for (const w of retryWarnings) {
+                            console.warn(chalk.yellow(`[never-translate] still corrupted after retry: ${w}`));
+                        }
+                    } else {
+                        console.warn(chalk.yellow('[never-translate] retry did not improve placeholder fidelity, keeping original'));
+                    }
+                } catch {
+                    console.warn(chalk.yellow('[never-translate] retry response could not be parsed, keeping original'));
+                }
+            }
+        }
+
         const restoredNeverTranslateEntries = this.restoreNeverTranslateEntries(
             translatedEntries,
             neverTranslateReplacements
@@ -997,6 +1162,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
 
         let translatedContent = this.restoreTranslatedContent(skeleton, restoredNeverTranslateEntries);
         translatedContent = this.restoreInlineCodePlaceholders(translatedContent, inlineCodePlaceholders);
+        translatedContent = this.fixAdmonitionIndentation(translatedContent);
         if (this.isEnglishTarget(targetLanguage)) {
             return this.normalizeEnglishInlineCodeSpacing(translatedContent);
         }

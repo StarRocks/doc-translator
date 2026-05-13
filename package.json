@@ -1,11 +1,11 @@
 {
-  "name": "markdown-translator",
+  "name": "doc-translator",
   "version": "1.0.0",
-  "description": "A command line tool to translate markdown and MDX files using Google Gemini AI",
+  "description": "A command line tool to translate markdown and MDX files using Claude AI",
   "type": "module",
   "main": "index.js",
   "bin": {
-    "md-translate": "bin/cli.js"
+    "doc-translate": "bin/cli.js"
   },
   "scripts": {
     "start": "node bin/cli.js",
@@ -19,14 +19,15 @@
     "markdown",
     "docusaurus",
     "translation",
-    "gemini",
+    "claude",
+    "anthropic",
     "ai",
     "cli"
   ],
   "author": "Your Name",
   "license": "MIT",
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
+    "@anthropic-ai/sdk": "^0.95.2",
     "@playcanvas/eslint-config": "2.1.0",
     "chalk": "^5.4.1",
     "commander": "^14.0.0",
