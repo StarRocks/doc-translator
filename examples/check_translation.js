@@ -233,6 +233,9 @@ function checkFrontmatter(src, trn) {
         if (inSrc && !inTrn) {
             return result('Frontmatter', false, `Key '${key}' present in source but missing from translation`);
         }
+        if (!inSrc && inTrn) {
+            return result('Frontmatter', false, `Key '${key}' present in translation but missing from source`);
+        }
     }
 
     // All other keys must be preserved exactly.

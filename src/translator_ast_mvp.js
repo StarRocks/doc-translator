@@ -47,7 +47,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
     }
 
     isFullyProtected(text) {
-        return typeof text === 'string' && /^(\s*__MTX_NEVER_[0-9a-f]+__\s*)+$/.test(text);
+        return typeof text === 'string' && /^(?:\s*__MTX_NEVER_[0-9a-f]+(?:_\d+)?__)+\s*$/.test(text);
     }
 
     isSkippableTextParent(parentType) {
@@ -820,7 +820,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                 expectedCols = null;
                 return;
             }
-            if (/^\|([\s:]*-[\s:-]*\|)+$/.test(trimmed)) {
+            if (/^\|(?:[\s:]*-[\s:-]*\|)+$/.test(trimmed)) {
                 expectedCols = (trimmed.match(/(?<!\\)\|/g) || []).length - 1;
                 return;
             }
@@ -833,7 +833,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                 console.warn(chalk.yellow(
                     `[table] Extra column at line ${i + 1} of ${outputPath} ` +
                     `(expected ${expectedCols}, got ${cells.length}). ` +
-                    `Review manually: node ~/GitHub/doc-translator/bin/cli.js translate ` +
+                    'Review manually: node ~/GitHub/doc-translator/bin/cli.js translate ' +
                     `-s en -i ${inputPath} -l ja -o ${outputPath}`
                 ));
                 warned = true;
@@ -883,16 +883,16 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             } else if (closeMatch && admonitionStack.length > 0) {
                 const expectedIndent = admonitionStack[admonitionStack.length - 1];
                 const actualIndent = closeMatch[1].length;
-                result.push(actualIndent < expectedIndent
-                    ? `${' '.repeat(expectedIndent)}:::`
-                    : line);
+                result.push(actualIndent < expectedIndent ?
+                    `${' '.repeat(expectedIndent)}:::` :
+                    line);
                 admonitionStack.pop();
             } else if (admonitionStack.length > 0 && line.trim() !== '') {
                 const expectedIndent = admonitionStack[admonitionStack.length - 1];
                 const actualIndent = line.length - line.trimStart().length;
-                result.push(actualIndent < expectedIndent
-                    ? `${' '.repeat(expectedIndent)}${line.trimStart()}`
-                    : line);
+                result.push(actualIndent < expectedIndent ?
+                    `${' '.repeat(expectedIndent)}${line.trimStart()}` :
+                    line);
             } else {
                 result.push(line);
             }
@@ -944,17 +944,17 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                 }
 
                 // Detect addedIndent from the first non-empty line inside the block.
-                // Limitation: if the source legitimately starts a block with indented
-                // content (e.g. a nested list indented beyond the opener), that indent
-                // is read as model-added drift and stripped. In practice StarRocks MDX
-                // blocks don't open with intentionally indented content.
+                // If the first line looks like intentionally structured markdown
+                // (e.g. nested list, blockquote, fenced code, nested JSX), preserve it.
                 if (top && top.addedIndent === null && processedTrimmed.length > 0) {
                     // processedLine === line here (addedIndent was null so no stripping happened above)
                     const rawIndent = line.length - line.trimStart().length;
                     const detected = rawIndent > top.openerIndent ? rawIndent - top.openerIndent : 0;
-                    top.addedIndent = detected;
-                    if (detected > 0 && rawIndent >= detected) {
-                        processedLine = line.slice(detected);
+                    const startsStructuredMarkdown = /^(?:[-*+]\s|\d+[.)]\s|>\s|:::[\w-]+|[`~]{3,}|<\/?[a-z])/i.test(processedTrimmed);
+                    const normalized = (startsStructuredMarkdown || detected >= 4) ? 0 : detected;
+                    top.addedIndent = normalized;
+                    if (normalized > 0 && rawIndent >= normalized) {
+                        processedLine = line.slice(normalized);
                     }
                 }
 
@@ -1036,13 +1036,13 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return content.replace(
             /^(---\n[\s\S]*?\n---)/m,
             fm => fm.replace(
-                /^((description|sidebar_label):\s*)"([\s\S]*?)"([ \t]*)$/mg,
+                /^((description|sidebar_label):\s*)"([\s\S]*?)"([ \t]*)$/gm,
                 (_, pre, _key, inner, trail) => {
                     // Preserve existing \" sequences, escape any remaining bare "
                     const safe = inner
-                        .split('\\"').join('\x00')
-                        .split('"').join('\\"')
-                        .split('\x00').join('\\"');
+                    .split('\\"').join('\x00')
+                    .split('"').join('\\"')
+                    .split('\x00').join('\\"');
                     return `${pre}"${safe}"${trail}`;
                 }
             )
