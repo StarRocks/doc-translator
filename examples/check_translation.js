@@ -224,7 +224,18 @@ function checkFrontmatter(src, trn) {
     if (sf && !tf) return result('Frontmatter', false, 'Source has frontmatter; translation does not');
     if (!sf && tf) return result('Frontmatter', false, 'Translation has frontmatter; source does not');
 
-    // description and sidebar_label values are intentionally translated; compare everything else exactly.
+    // description and sidebar_label are intentionally translated.
+    // Verify the keys are still present in the translation even though their values differ.
+    const TRANSLATABLE_KEYS = ['description', 'sidebar_label'];
+    for (const key of TRANSLATABLE_KEYS) {
+        const inSrc = sf.split('\n').some(l => l.match(new RegExp(`^${key}:`)));
+        const inTrn = tf.split('\n').some(l => l.match(new RegExp(`^${key}:`)));
+        if (inSrc && !inTrn) {
+            return result('Frontmatter', false, `Key '${key}' present in source but missing from translation`);
+        }
+    }
+
+    // All other keys must be preserved exactly.
     const strip = fm => fm.split('\n').filter(l => !l.match(/^(description|sidebar_label):/)).join('\n');
     const sfStripped = strip(sf);
     const tfStripped = strip(tf);

@@ -114,7 +114,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
 
     validateNeverTranslatePlaceholders(translatedEntries, replacements) {
         const validPlaceholders = new Set(replacements.map(r => r.placeholder));
-        const pattern = /__MTX_NEVER_[0-9a-f]{8}__/g;
+        const pattern = /__MTX_NEVER_[0-9a-f]{8}(?:_\d+)?__/g;
         const warnings = [];
 
         for (const entry of translatedEntries) {
@@ -378,9 +378,13 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                 const linePattern = new RegExp(`^(${key}:\\s*)(['"]?)(.+?)\\2\\s*$`, 'm');
                 const m = node.value.match(linePattern);
                 if (!m) continue;
-                const [, prefix, quote, value] = m;
+                const [, prefix, , value] = m;
                 registerEntry(value, (placeholder) => {
-                    node.value = node.value.replace(linePattern, `${prefix}${quote}${placeholder}${quote}`);
+                    // Always double-quote so the placeholder (and later the translated
+                    // value) sits inside a valid YAML quoted scalar regardless of the
+                    // original quoting style. fixFrontmatterYamlQuoting handles any
+                    // bare " characters the translation introduces.
+                    node.value = node.value.replace(linePattern, `${prefix}"${placeholder}"`);
                 });
             }
         });
@@ -939,7 +943,11 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                     continue;
                 }
 
-                // Detect addedIndent from the first non-empty line inside the block
+                // Detect addedIndent from the first non-empty line inside the block.
+                // Limitation: if the source legitimately starts a block with indented
+                // content (e.g. a nested list indented beyond the opener), that indent
+                // is read as model-added drift and stripped. In practice StarRocks MDX
+                // blocks don't open with intentionally indented content.
                 if (top && top.addedIndent === null && processedTrimmed.length > 0) {
                     // processedLine === line here (addedIndent was null so no stripping happened above)
                     const rawIndent = line.length - line.trimStart().length;
@@ -1009,8 +1017,36 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             `([ \\t]*<\\/?(?:${TABLE_TAGS})[^>]*>)\\n\\n([ \\t]*<)`,
             'g'
         );
-        // Run twice to handle consecutive gaps (e.g. </tr>\n\n<tr>\n\n<td>)
-        return content.replace(pattern, '$1\n$2').replace(pattern, '$1\n$2');
+        // Loop until stable: each pass collapses one layer of consecutive gaps,
+        // so three or more adjacent structural elements need more than two passes.
+        let result = content;
+        let prev;
+        do {
+            prev = result;
+            result = result.replace(pattern, '$1\n$2');
+        } while (result !== prev);
+        return result;
+    }
+
+    fixFrontmatterYamlQuoting(content) {
+        // description and sidebar_label are always wrapped in double quotes by the
+        // extractor so the placeholder sits safely inside a quoted scalar. After the
+        // translated text is restored into those quotes, any literal " characters
+        // introduced by the translation would produce malformed YAML. Re-escape them.
+        return content.replace(
+            /^(---\n[\s\S]*?\n---)/m,
+            fm => fm.replace(
+                /^((description|sidebar_label):\s*)"([\s\S]*?)"([ \t]*)$/mg,
+                (_, pre, _key, inner, trail) => {
+                    // Preserve existing \" sequences, escape any remaining bare "
+                    const safe = inner
+                        .split('\\"').join('\x00')
+                        .split('"').join('\\"')
+                        .split('\x00').join('\\"');
+                    return `${pre}"${safe}"${trail}`;
+                }
+            )
+        );
     }
 
     restoreInlineCodePlaceholders(content, inlineCodePlaceholders) {
@@ -1295,6 +1331,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         translatedContent = this.fixJsxBlockIndentation(translatedContent);
         translatedContent = this.fixAdmonitionIndentation(translatedContent);
         translatedContent = this.fixHtmlTableNewlines(translatedContent);
+        translatedContent = this.fixFrontmatterYamlQuoting(translatedContent);
         if (this.isEnglishTarget(targetLanguage)) {
             return this.normalizeEnglishInlineCodeSpacing(translatedContent);
         }

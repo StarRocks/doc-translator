@@ -127,8 +127,27 @@ async function main() {
     // ── set up docs directory ────────────────────────────────────────────────
     await fs.ensureDir(DOCS_DIR);
     await fs.emptyDir(DOCS_DIR);
-    await fs.copy(sourcePath, path.join(DOCS_DIR, 'source.md'));
-    await fs.copy(translatedPath, path.join(DOCS_DIR, 'translated.md'));
+
+    // Strip slug and id from frontmatter so Docusaurus always writes HTML to
+    // build/docs/{source|translated}/index.html. Without this, a doc with
+    // slug: /some/path would write to a different path and findHtml() would
+    // throw "Built HTML not found" for reasons unrelated to translation quality.
+    const stripRoutingFrontmatter = content => content.replace(
+        /^(---\n)([\s\S]*?)(\n---)/m,
+        (_, open, fm, close) => {
+            const cleaned = fm.split('\n').filter(l => !/^(slug|id):/.test(l)).join('\n');
+            return `${open}${cleaned}${close}`;
+        }
+    );
+
+    await fs.writeFile(
+        path.join(DOCS_DIR, 'source.md'),
+        stripRoutingFrontmatter(await fs.readFile(sourcePath, 'utf8'))
+    );
+    await fs.writeFile(
+        path.join(DOCS_DIR, 'translated.md'),
+        stripRoutingFrontmatter(await fs.readFile(translatedPath, 'utf8'))
+    );
 
     // ── install deps if needed ───────────────────────────────────────────────
     ensureDepsInstalled();
