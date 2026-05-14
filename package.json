@@ -13,7 +13,10 @@
     "setup": "node bin/cli.js setup",
     "languages": "node bin/cli.js languages",
     "lint": "eslint bin/**/*.js src/**/*.js",
-    "test": "rm -f examples/StarRocksTest_zh.md && node bin/cli.js translate -i examples/StarRocksTest.md -l zh -s en"
+    "test": "rm -f examples/StarRocksTest_zh.md && node bin/cli.js translate -i examples/StarRocksTest.md -l zh -s en && node examples/check_translation.js examples/StarRocksTest.md examples/StarRocksTest_zh.md",
+    "test:ja": "rm -f examples/StarRocksTest_ja.md && node bin/cli.js translate -i examples/StarRocksTest.md -l ja -s en && node examples/check_translation.js examples/StarRocksTest.md examples/StarRocksTest_ja.md",
+    "check:zh": "node examples/check_translation.js examples/StarRocksTest.md examples/StarRocksTest_zh.md",
+    "check:ja": "node examples/check_translation.js examples/StarRocksTest.md examples/StarRocksTest_ja.md"
   },
   "keywords": [
     "markdown",

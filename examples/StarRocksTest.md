@@ -1,3 +1,9 @@
+---
+displayed_sidebar: docs
+toc_max_heading_level: 4
+keywords: ['StarRocks', 'translation test', 'Iceberg', 'Hive']
+---
+
 # Sample Markdown Document
 
 If you define configuration items in the custom catalog and want configuration items to take effect when you query data, you can add the configuration items to the `PROPERTIES` parameter as key-value pairs when you create an external table. For example, if you define a configuration item `custom-catalog.properties` in the custom catalog, you can run the following command to create an external table.
@@ -338,4 +344,160 @@ insert into external_t select * from other_table;
 - [USE](../Database/USE.md)
 - [ALTER TABLE](ALTER_TABLE.md)
 - [DROP TABLE](DROP_TABLE.md)
+
+## HTML in Table Cells
+
+Some StarRocks docs use HTML inside Markdown table cells to support complex multi-item content. The HTML tags must be preserved exactly:
+
+| External Data Source | Supported Scenarios | Stable Versions |
+| :------------------- | :------------------ | :-------------- |
+| Hive | <ul><li>Non-partitioned table: v2.5.4 & v3.0+</li><li>DATE and DATETIME-type partition: v2.5.4 & v3.0+</li><li>STRING-type Partition Key to DATE: v3.1.4+</li></ul> | v2.5.13+<br />v3.0.6+<br />v3.1.5+ |
+| Iceberg | <ul><li>Non-partitioned table: v3.0+</li><li>Partition Transform: v3.2.3</li><li>Partition-level refresh: v3.1.7 & v3.2.3</li></ul> | v3.1.5+<br />v3.2+ |
+
+Cells may also contain inline HTML: set the `index` parameter to <code class="language-text">hello*</code> to retrieve all indexes whose names start with `hello`.
+
+## Tilde Fence Code Blocks
+
+Some older StarRocks docs use tilde fences (~~~) instead of backtick fences. These must be processed correctly:
+
+~~~SQL
+CREATE TABLE tbl (k1 int, v1 int sum)
+DISTRIBUTED BY HASH(k1)
+BUCKETS 8
+PROPERTIES(
+    "colocate_with" = "group1"
+);
+~~~
+
+~~~Plain Text
+SHOW PROC '/colocation_group';
+~~~
+
+## MDX Imports and JSX Components
+
+StarRocks MDX files use Docusaurus Tabs components for multi-platform documentation:
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+<Tabs groupId="storage">
+<TabItem value="AWS" label="AWS S3" default>
+
+Configure your StarRocks cluster to access AWS S3 storage. Choose one of the following authentication methods:
+
+- Instance profile (recommended for production)
+- Assumed role
+- IAM user
+
+</TabItem>
+
+<TabItem value="HDFS" label="HDFS">
+
+Configure your StarRocks cluster to access HDFS storage.
+
+:::tip
+
+If an error indicating an unknown host is returned when you send a query, add the mapping between host names and IP addresses of your HDFS cluster nodes to the **/etc/hosts** file.
+
+:::
+
+</TabItem>
+</Tabs>
+
+## Template Variables in Code
+
+Integration docs for Airflow and dbt use double-brace template syntax inside code blocks. These must not be translated:
+
+```sql
+-- Load new rows since the last run
+SELECT *
+FROM source_table
+WHERE loaded_at >= '{{ data_interval_start }}'
+  AND loaded_at < '{{ data_interval_end }}'
+  AND record_id NOT IN (SELECT record_id FROM target_table)
+```
+
+The dbt `config` block uses the same double-brace syntax:
+
+```sql
+{{ config(
+    materialized='table',
+    indexes=[{"columns":["order_id"]}]
+)}}
+
+SELECT * FROM {{ source('your_source', 'orders') }}
+JOIN {{ source('your_source', 'users') }} USING (user_id)
+```
+
+## HTML Comparison Table
+
+Data lake documentation uses full HTML tables with colspan for comparison grids:
+
+<table>
+  <thead>
+    <tr>
+      <th>&nbsp;</th>
+      <th>Data Cache</th>
+      <th>Materialized view</th>
+      <th>Native table</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><b>Data loading and updates</b></td>
+      <td>Queries automatically trigger data caching.</td>
+      <td>Refresh tasks are triggered automatically or manually.</td>
+      <td>Supports various import methods but requires manual maintenance.</td>
+    </tr>
+    <tr>
+      <td><b>Query performance</b></td>
+      <td colspan="3">Data Cache &le; Materialized view = Native table</td>
+    </tr>
+  </tbody>
+</table>
+
+## Admonition Inside a Numbered List
+
+When an admonition appears inside a numbered list item, its indentation must be preserved:
+
+1. Create the database and schema in StarRocks.
+
+2. Load your data into the staging table.
+
+   :::note
+   Ensure that the staging table schema matches the target table schema. If the schemas differ, the load job will fail with a schema mismatch error.
+   :::
+
+3. Insert data from the staging table into the target table.
+
+   :::caution
+   Running INSERT OVERWRITE replaces all existing data in the target partition. Verify your filter conditions before executing.
+   :::
+
+4. Verify the row counts match between staging and target.
+
+## Details Block
+
+The HTML `<details>` element creates a collapsible section. Content indentation must be preserved:
+
+<details>
+<summary>Advanced configuration options</summary>
+
+- `max_scan_key_num`: Maximum number of scan keys evaluated per query (default: 1024).
+- `enable_profile`: Enable query profile collection for performance analysis (default: false).
+- `query_timeout`: Maximum query execution time in seconds before cancellation (default: 300).
+
+</details>
+
+## Cross-References with Anchors
+
+Links with relative paths and in-page anchors must have their URL portion preserved unchanged:
+
+For more information, see the following resources:
+
+- [Query Planning](../best_practices/query_tuning/query_planning.md)
+- [JOIN Operations](../sql-reference/sql-statements/table_bucket_part_index/SELECT/SELECT.md#join)
+- [ALTER RESOURCE](../sql-reference/sql-statements/Resource/ALTER_RESOURCE.md)
+- [Data type mapping](External_table.md#Data-type-mapping)
+- [Iceberg catalog](./catalog/iceberg/iceberg_catalog.md)
 

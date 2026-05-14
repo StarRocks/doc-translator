@@ -429,6 +429,54 @@ The tool provides clear error messages for common issues:
 - Network connectivity issues
 - API rate limiting
 
+## Testing
+
+The `examples/` directory contains a test corpus and an automated checker.
+
+### Test corpus: `examples/StarRocksTest.md`
+
+A curated set of patterns drawn from real StarRocks documentation that have caused translation problems in the past:
+
+| Pattern | Why it matters |
+|---------|---------------|
+| YAML frontmatter | Must be preserved exactly |
+| HTML in Markdown table cells (`<ul><li>`, `<br />`, `<code class="...">`) | Tags must not be translated or restructured |
+| Tilde fence code blocks (`~~~SQL`) | Must be converted to backtick fences cleanly |
+| MDX `import` statements and `<Tabs>`/`<TabItem>` JSX | Must be preserved unchanged |
+| Template variables in code (`{{ data_interval_start }}`) | Airflow/dbt syntax must not be touched |
+| HTML comparison tables with `colspan` | Full HTML blocks must pass through untranslated |
+| Admonitions indented inside numbered lists | Indentation must survive translation |
+| `<details>` collapsible blocks | Content indentation must be preserved |
+| Cross-references with relative paths and anchors | Only the display text is translated; the URL is not |
+
+### Automated checker: `examples/check_translation.js`
+
+After translation, the checker runs 13 static checks against the source/output pair and reports PASS/FAIL for each:
+
+- No `__MTX_` placeholder leaks
+- Heading count
+- Code block count and non-comment content
+- Link URL preservation
+- HTML tags in table cells
+- Frontmatter preserved exactly
+- Import statements preserved
+- Admonition marker count
+- Admonition indentation (catches the "indented :::note gets unindented" bug)
+- Never-translate term spot-check
+- Unordered list item count
+- Table column counts
+
+### npm scripts
+
+```bash
+npm test          # Translate StarRocksTest.md → zh, then run all checks
+npm run test:ja   # Translate StarRocksTest.md → ja, then run all checks
+npm run check:zh  # Re-run checks on an already-translated StarRocksTest_zh.md
+npm run check:ja  # Re-run checks on an already-translated StarRocksTest_ja.md
+```
+
+`check:zh` and `check:ja` are useful for iterating on the system prompt or dictionaries without calling the API again.
+
 ## Development
 
 ### Project Structure
@@ -436,11 +484,19 @@ The tool provides clear error messages for common issues:
 ```
 doc-translator/
 ├── bin/
-│   └── cli.js           # CLI entry point
+│   └── cli.js                    # CLI entry point
 ├── src/
-│   └── translator.js    # Core translation logic
-├── package.json         # Dependencies and scripts
-└── README.md           # Documentation
+│   ├── translator.js             # Base class and shared utilities
+│   ├── translator_ast_mvp.js     # AST-based translator (default)
+│   └── configs/
+│       ├── system_prompt.txt     # Translation instructions for the model
+│       ├── never_translate.yaml  # Terms that must never be translated
+│       └── language_dicts/       # Per-language translation dictionaries
+├── examples/
+│   ├── StarRocksTest.md          # Test corpus
+│   └── check_translation.js     # Automated output checker
+├── package.json
+└── README.md
 ```
 
 ### Architecture
