@@ -950,7 +950,9 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                     // processedLine === line here (addedIndent was null so no stripping happened above)
                     const rawIndent = line.length - line.trimStart().length;
                     const detected = rawIndent > top.openerIndent ? rawIndent - top.openerIndent : 0;
-                    const startsStructuredMarkdown = /^(?:[-*+]\s|\d+[.)]\s|>\s|:::[\w-]+|[`~]{3,}|<\/?[a-z])/i.test(processedTrimmed);
+                    const startsStructuredMarkdown = /^(?:[-*+]\s|\d+[.)]\s|>\s|:::[\w-]+|[`~]{3,}|<\/?[A-Z][^>]*>|<\/?[a-z][^>]*>)/.test(processedTrimmed);
+                    // Four leading spaces in markdown commonly indicate intentional
+                    // nested structure (e.g. indented code/list content), so keep it.
                     const normalized = (startsStructuredMarkdown || detected >= 4) ? 0 : detected;
                     top.addedIndent = normalized;
                     if (normalized > 0 && rawIndent >= normalized) {
