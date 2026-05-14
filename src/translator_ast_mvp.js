@@ -926,7 +926,16 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                 // Check for closing tag of the top block
                 if (top && new RegExp(`^<\\/${top.tag}\\b`).test(processedTrimmed)) {
                     blockStack.pop();
-                    result.push(processedLine);
+                    // Always emit the closer at the opener's indentation level (the model
+                    // sometimes indents </TabItem> to match preceding list content, which
+                    // makes MDX parse it as list continuation rather than a JSX closer).
+                    const normalizedCloser = `${' '.repeat(top.openerIndent)}${processedLine.trimStart()}`;
+                    // Ensure a blank line precedes the closer so it isn't swallowed by a
+                    // preceding list, paragraph, or admonition block.
+                    if (result.length > 0 && result[result.length - 1].trim() !== '') {
+                        result.push('');
+                    }
+                    result.push(normalizedCloser);
                     continue;
                 }
 
