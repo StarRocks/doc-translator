@@ -32,7 +32,7 @@ ${never_translate}
 - Markdown links must always have a space before the opening square bracket `[`. If there is a missing space add it.
 - Markdown links must always have a space after the closing parens `)`. If there is a missing space add it.
 - Be careful with `<Tabs>` and `<TabItem>` formatting. Respect spacing and newlines around these important constructs. Especially after lists, be sure to keep the same spacing. There must be a double newline after the list.
-- **Do NOT indent content inside `<TabItem>` blocks.** Preserve the exact leading whitespace of every line inside a `<TabItem>` exactly as it appears in the source. For example, if the source has `### Heading` inside a `<TabItem>`, it must remain `### Heading` in the translation — not `    ### Heading`.
+- **CRITICAL — Do NOT add indentation inside `<TabItem>` blocks.** Every line inside a `<TabItem>` must keep exactly the same leading whitespace as the source. Adding even 4 spaces causes list items to render as code blocks and admonitions to lose their meaning. See CRITICAL FORMATTING RULE 6 below.
 - For inline formatting (italic, bold, strikethrough, inline code) in Japanese, consider adding spaces before and after when applying to part of a word/phrase. For example "_A_ and _B_" should be translated as "_A_ と _B_", not "_A_と_B_". Without spaces, the translated markdown does not work.
 - Add a space when switching between alphabets and Japanese characters including Kanji, Hiragana, and Katagana.
 - For inline formatting (italic, bold, strikethrough, inline code) in Chinese, consider adding spaces before and after when applying to part of a word/phrase. For example "_A_ and _B_" should be translated as "_A_ 和 _B_", not "_A_和_B_". Without spaces, the translated markdown does not work.
@@ -103,4 +103,36 @@ ${never_translate}
    </details>
    ```
    The translation must keep the same indentation — `- Item one` must remain `- Item one`, not `  - Item one` or `    - Item one`.
+
+6. **DO NOT ADD INDENTATION INSIDE `<TabItem>` BLOCKS**: Every line inside a `<TabItem>` block must have exactly the same leading whitespace as in the source. Adding indentation breaks Markdown rendering — list items become indented code blocks, admonitions get wrong indentation, and code fences stop working.
+   - ❌ WRONG — 4 spaces added to all content inside the block:
+     ```
+     <TabItem value="HDFS" label="HDFS">
+
+         Configure your cluster for HDFS.
+
+         - Option A
+         - Option B
+
+         :::tip
+         Add host entries to /etc/hosts.
+         :::
+
+     </TabItem>
+     ```
+   - ✅ CORRECT — every line at the same indentation as in the source:
+     ```
+     <TabItem value="HDFS" label="HDFS">
+
+     Configure your cluster for HDFS.
+
+     - Option A
+     - Option B
+
+     :::tip
+     Add host entries to /etc/hosts.
+     :::
+
+     </TabItem>
+     ```
 

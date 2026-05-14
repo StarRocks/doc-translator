@@ -78,7 +78,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             }
 
             const escapedTerm = this.escapeForRegex(term);
-            const pattern = new RegExp(escapedTerm, 'g');
+            const pattern = new RegExp(`\\b${escapedTerm}\\b`, 'g');
 
             // Resolve placeholder, detecting hash collisions
             let placeholder = termToPlaceholder.get(term);
@@ -114,7 +114,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
 
     validateNeverTranslatePlaceholders(translatedEntries, replacements) {
         const validPlaceholders = new Set(replacements.map(r => r.placeholder));
-        const pattern = /__MTX_NEVER_\w+__/g;
+        const pattern = /__MTX_NEVER_[0-9a-f]{8}__/g;
         const warnings = [];
 
         for (const entry of translatedEntries) {
@@ -370,6 +370,20 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         };
 
         processChildrenForInlineCodeContext(tree);
+
+        // Translate description and sidebar_label values in YAML frontmatter.
+        // All other frontmatter keys (including their values) are preserved exactly.
+        visit(tree, 'yaml', (node) => {
+            for (const key of ['description', 'sidebar_label']) {
+                const linePattern = new RegExp(`^(${key}:\\s*)(['"]?)(.+?)\\2\\s*$`, 'm');
+                const m = node.value.match(linePattern);
+                if (!m) continue;
+                const [, prefix, quote, value] = m;
+                registerEntry(value, (placeholder) => {
+                    node.value = node.value.replace(linePattern, `${prefix}${quote}${placeholder}${quote}`);
+                });
+            }
+        });
 
         visit(tree, 'code', (node) => {
             this.extractTranslatableCodeComments(node, registerEntry);
@@ -883,6 +897,113 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return result.join('\n');
     }
 
+    fixJsxBlockIndentation(content) {
+        const lines = content.split('\n');
+        const result = [];
+        const blockStack = []; // { tag, openerIndent, addedIndent }
+        let inCodeBlock = false;
+        let codeFenceChar = '';
+        let codeFenceLen = 0;
+
+        for (const line of lines) {
+            const top = blockStack.length > 0 ? blockStack[blockStack.length - 1] : null;
+
+            // Strip the current top block's addedIndent from this line (if already known)
+            let processedLine = line;
+            if (top && top.addedIndent !== null && top.addedIndent > 0) {
+                const trimmed = line.trimStart();
+                if (trimmed.length > 0) {
+                    const indent = line.length - trimmed.length;
+                    if (indent >= top.addedIndent) {
+                        processedLine = line.slice(top.addedIndent);
+                    }
+                }
+            }
+
+            if (!inCodeBlock) {
+                const processedTrimmed = processedLine.trimStart();
+
+                // Check for closing tag of the top block
+                if (top && new RegExp(`^<\\/${top.tag}\\b`).test(processedTrimmed)) {
+                    blockStack.pop();
+                    result.push(processedLine);
+                    continue;
+                }
+
+                // Detect addedIndent from the first non-empty line inside the block
+                if (top && top.addedIndent === null && processedTrimmed.length > 0) {
+                    // processedLine === line here (addedIndent was null so no stripping happened above)
+                    const rawIndent = line.length - line.trimStart().length;
+                    const detected = rawIndent > top.openerIndent ? rawIndent - top.openerIndent : 0;
+                    top.addedIndent = detected;
+                    if (detected > 0 && rawIndent >= detected) {
+                        processedLine = line.slice(detected);
+                    }
+                }
+
+                // Check for a new JSX block opener (Tabs, TabItem, or details)
+                const openerMatch = processedLine.match(/^(\s*)<(Tabs|TabItem|details)[\s>]/);
+                if (openerMatch && !processedLine.trimEnd().endsWith('/>')) {
+                    const innerTrimmed = processedLine.trimStart();
+                    blockStack.push({
+                        tag: openerMatch[2],
+                        openerIndent: processedLine.length - innerTrimmed.length,
+                        addedIndent: null
+                    });
+                    result.push(processedLine);
+                    continue;
+                }
+
+                // Track code fence openings
+                const fenceM = processedLine.match(/^(\s*)([`~]{3,})/);
+                if (fenceM) {
+                    inCodeBlock = true;
+                    codeFenceChar = fenceM[2][0];
+                    codeFenceLen = fenceM[2].length;
+                    result.push(processedLine);
+                    continue;
+                }
+
+                // Empty lines: output the original line (nothing to strip)
+                if (!processedTrimmed) {
+                    result.push(line);
+                } else {
+                    result.push(processedLine);
+                }
+            } else {
+                // Inside a code block: track fence closing, still apply parent stripping
+                const fenceM = processedLine.match(/^(\s*)([`~]{3,})/);
+                if (fenceM) {
+                    const ch = fenceM[2][0];
+                    const len = fenceM[2].length;
+                    if (ch === codeFenceChar && len >= codeFenceLen) {
+                        inCodeBlock = false;
+                        codeFenceChar = '';
+                        codeFenceLen = 0;
+                    }
+                }
+                result.push(processedLine);
+            }
+        }
+
+        return result.join('\n');
+    }
+
+    fixHtmlTableNewlines(content) {
+        // The MDX stringifier inserts a blank line between sibling JSX/HTML block
+        // elements. Inside an HTML <table> this creates a blank line between
+        // </thead> and <tbody> (and similar pairs), which terminates the CommonMark
+        // HTML block so that indented content after the gap is treated as code blocks.
+        // Collapse those spurious blank lines between HTML table structural tags.
+        const TABLE_TAGS = 'table|thead|tbody|tfoot|tr|th|td|colgroup|col|caption';
+        const pattern = new RegExp(
+            `([ \\t]*<\\/?(?:${TABLE_TAGS})[^>]*>)\\n\\n([ \\t]*<)`,
+            'g'
+        );
+        // Run twice to handle consecutive gaps (e.g. </tr>\n\n<tr>\n\n<td>)
+        return content.replace(pattern, '$1\n$2').replace(pattern, '$1\n$2');
+    }
+
     restoreInlineCodePlaceholders(content, inlineCodePlaceholders) {
         let output = content;
 
@@ -1162,7 +1283,9 @@ class AstMarkdownTranslator extends MarkdownTranslator {
 
         let translatedContent = this.restoreTranslatedContent(skeleton, restoredNeverTranslateEntries);
         translatedContent = this.restoreInlineCodePlaceholders(translatedContent, inlineCodePlaceholders);
+        translatedContent = this.fixJsxBlockIndentation(translatedContent);
         translatedContent = this.fixAdmonitionIndentation(translatedContent);
+        translatedContent = this.fixHtmlTableNewlines(translatedContent);
         if (this.isEnglishTarget(targetLanguage)) {
             return this.normalizeEnglishInlineCodeSpacing(translatedContent);
         }

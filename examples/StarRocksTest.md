@@ -1,6 +1,8 @@
 ---
 displayed_sidebar: docs
+sidebar_label: "StarRocks Translation Test"
 toc_max_heading_level: 4
+description: A curated set of patterns from real StarRocks documentation used to verify translation quality.
 keywords: ['StarRocks', 'translation test', 'Iceberg', 'Hive']
 ---
 
