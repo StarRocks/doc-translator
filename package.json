@@ -16,7 +16,9 @@
     "test": "rm -f examples/StarRocksTest_zh.md && node bin/cli.js translate -i examples/StarRocksTest.md -l zh -s en && node examples/check_translation.js examples/StarRocksTest.md examples/StarRocksTest_zh.md",
     "test:ja": "rm -f examples/StarRocksTest_ja.md && node bin/cli.js translate -i examples/StarRocksTest.md -l ja -s en && node examples/check_translation.js examples/StarRocksTest.md examples/StarRocksTest_ja.md",
     "check:zh": "node examples/check_translation.js examples/StarRocksTest.md examples/StarRocksTest_zh.md",
-    "check:ja": "node examples/check_translation.js examples/StarRocksTest.md examples/StarRocksTest_ja.md"
+    "check:ja": "node examples/check_translation.js examples/StarRocksTest.md examples/StarRocksTest_ja.md",
+    "check:docusaurus:zh": "node examples/check_docusaurus.js examples/StarRocksTest.md examples/StarRocksTest_zh.md",
+    "check:docusaurus:ja": "node examples/check_docusaurus.js examples/StarRocksTest.md examples/StarRocksTest_ja.md"
   },
   "keywords": [
     "markdown",
@@ -33,6 +35,7 @@
     "@anthropic-ai/sdk": "^0.95.2",
     "@playcanvas/eslint-config": "2.1.0",
     "chalk": "^5.4.1",
+    "cheerio": "1.0.0",
     "commander": "^14.0.0",
     "eslint": "^9.31.0",
     "fs-extra": "^11.2.0",
@@ -51,6 +54,6 @@
     "@StarRocks:registry": "https://npm.pkg.github.com"
   },
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=18.0.0"
   }
 }

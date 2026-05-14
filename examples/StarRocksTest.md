@@ -1,6 +1,8 @@
 ---
 displayed_sidebar: docs
+sidebar_label: "StarRocks Translation Test"
 toc_max_heading_level: 4
+description: A curated set of patterns from real StarRocks documentation used to verify translation quality.
 keywords: ['StarRocks', 'translation test', 'Iceberg', 'Hive']
 ---
 
@@ -264,7 +266,7 @@ The following table describes the parameters.
 | **Parameter**        | **Required** | **Default value** | **Description**                                              |
 | -------------------- | ------------ | ----------------- | ------------------------------------------------------------ |
 | hosts                | Yes          | None              | The connection address of the Elasticsearch cluster. You can specify one or more addresses. StarRocks can parse the Elasticsearch version and index shard allocation from this address. StarRocks communicates with your Elasticsearch cluster based on the address returned by the `GET /_nodes/http` API operation. Therefore, the value of the `host` parameter must be the same as the address returned by the `GET /_nodes/http` API operation. Otherwise, BEs may not be able to communicate with your Elasticsearch cluster. |
-| index                | Yes          | None              | The name of the Elasticsearch index that is created on the table in StarRocks. The name can be an alias. This parameter supports wildcards (\*). For example, if you set `index` to <code class="language-text">hello*</code>, StarRocks retrieves all indexes whose names start with `hello`. |
+| index                | Yes          | None              | The name of the Elasticsearch index that is created on the table in StarRocks. The name can be an alias. This parameter supports wildcards (`*`). For example, if you set `index` to `hello*`, StarRocks retrieves all indexes whose names start with `hello`. |
 | user                 | No           | Empty             | The username that is used to log in to the Elasticsearch cluster with basic authentication enabled. Make sure you have access to `/*cluster/state/*nodes/http` and the index. |
 | password             | No           | Empty             | The password that is used to log in to the Elasticsearch cluster. |
 | type                 | No           | `_doc`            | The type of the index. Default value: `_doc`. If you want to query data in Elasticsearch 8 and later versions, you do not need to configure this parameter because the mapping types have been removed in Elasticsearch 8 and later versions. |
@@ -354,7 +356,7 @@ Some StarRocks docs use HTML inside Markdown table cells to support complex mult
 | Hive | <ul><li>Non-partitioned table: v2.5.4 & v3.0+</li><li>DATE and DATETIME-type partition: v2.5.4 & v3.0+</li><li>STRING-type Partition Key to DATE: v3.1.4+</li></ul> | v2.5.13+<br />v3.0.6+<br />v3.1.5+ |
 | Iceberg | <ul><li>Non-partitioned table: v3.0+</li><li>Partition Transform: v3.2.3</li><li>Partition-level refresh: v3.1.7 & v3.2.3</li></ul> | v3.1.5+<br />v3.2+ |
 
-Cells may also contain inline HTML: set the `index` parameter to <code class="language-text">hello*</code> to retrieve all indexes whose names start with `hello`.
+Cells may also contain inline HTML like `<br />` or `<ul>` for formatting inside table cells (see the table above). Use backtick inline code for literal special characters: set the `index` parameter to `hello*` to retrieve all indexes whose names start with `hello`.
 
 ## Tilde Fence Code Blocks
 
