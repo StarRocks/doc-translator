@@ -21,6 +21,8 @@ This code and most of the README are from the team at [PlayCanvas](https://githu
   -d, --output-dir <dir>  Output directory (for batch translation or single
                           file)
   -k, --key <apikey>      Anthropic API key (or set ANTHROPIC_API_KEY env var)
+  -m, --model <model>     Claude model to use (or set ANTHROPIC_MODEL env var;
+                          default: claude-sonnet-5)
   --flat                  Use flat structure in output directory (default:
                           preserve structure)
   --suffix <suffix>       Custom suffix for output files (default: language
@@ -159,6 +161,38 @@ export ANTHROPIC_API_KEY="your-api-key-here"
 doc-translate translate -i file.md -l Spanish --key your-api-key-here
 ```
 
+**Option C: `.env` file**
+
+Copy `.env.example` to `.env` in the directory you run the tool from. `.env` is gitignored,
+and real environment variables take precedence over it.
+
+```bash
+ANTHROPIC_API_KEY=your-api-key-here
+```
+
+### 3. Choose a Model (optional)
+
+The default is `claude-sonnet-5`. Override it in either of two places, highest precedence first:
+
+```bash
+# 1. --model / -m flag (wins over everything)
+doc-translate translate -i file.md -l Spanish --model claude-opus-5
+
+# 2. ANTHROPIC_MODEL, exported or set in .env
+export ANTHROPIC_MODEL=claude-opus-5
+```
+
+The resolved model is printed at startup and in the run summary.
+
+Two notes on model selection:
+
+- The Claude 5 generation rejects `temperature`, so the tool only sends `temperature: 0`
+  for older models that accept it (Sonnet 4.6, Opus 4.6, and earlier). This is handled
+  automatically per model.
+- `max_tokens` is 16000. Claude 5 models run adaptive thinking by default and thinking
+  tokens count against that cap, so it needs the headroom. If you select an older model
+  with a lower output limit, reduce `DEFAULT_MAX_TOKENS` in `src/translator.js`.
+
 ## Usage
 
 ### Basic Translation
@@ -180,6 +214,21 @@ doc-translate translate -i examples/External_table.md -l Japanese
 ### Batch Processing
 
 The tool supports batch processing of multiple markdown files using glob patterns:
+
+**Always quote the pattern.** An unquoted glob is expanded by your shell before
+`doc-translate` runs, so `--input` receives only the first match and every other path
+arrives as a stray argument:
+
+```bash
+# Wrong - bash/zsh expands this into hundreds of paths
+doc-translate translate -i docs/**/*.md -l en -d ./out/
+
+# Right - the quotes let the tool do the expansion
+doc-translate translate -i "docs/**/*.md" -l en -d ./out/
+```
+
+Also keep the output directory outside the input tree, or a second run will pick up the
+translations from the first one as new source files.
 
 ```bash
 # Translate all .md files in current directory
@@ -209,6 +258,7 @@ Options:
   -o, --output <file>      Output file path (for single file translation)
   -d, --output-dir <dir>   Output directory (for batch translation or single file)
   -k, --key <apikey>       Anthropic API key (optional)
+  -m, --model <model>      Claude model to use (default: claude-sonnet-5)
   --flat                   Use flat structure in output directory (default: preserve structure)
   --suffix <suffix>        Custom suffix for output files (default: language name)
    --log-chunk-metadata     Log API metadata for each chunk
@@ -515,6 +565,7 @@ This project uses **ES modules (ESM)** for modern JavaScript development:
 - `chalk` - Terminal styling
 - `ora` - Progress spinners
 - `fs-extra` - Enhanced file system operations
+- `dotenv` - Loads `.env` from the working directory
 
 ## Contributing
 
