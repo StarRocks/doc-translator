@@ -39,6 +39,8 @@ program
 .option('-d, --output-dir <dir>', 'Output directory (for batch translation or single file)')
 .option('-k, --key <apikey>', 'Anthropic API key (or set ANTHROPIC_API_KEY env var)')
 .option('-m, --model <model>', `Claude model to use (or set ANTHROPIC_MODEL env var; default: ${DEFAULT_MODEL})`)
+.option('--never-translate <path>', 'Extra never-translate YAML list, merged over the built-in one (default: .doc-translator/never_translate.yaml if present)')
+.option('--no-heading-anchors', 'Do not emit the source-language slug as an explicit heading id')
 .option('--flat', 'Use flat structure in output directory (default: preserve structure)')
 .option('--suffix <suffix>', 'Custom suffix for output files (default: language name)')
 .option('--log-chunk-metadata', 'Log API metadata for each chunk')
@@ -70,7 +72,11 @@ program
         }
 
         // Initialize translator. Precedence: --model, then ANTHROPIC_MODEL, then the default.
-        const translator = new AstMarkdownTranslator(apiKey, { model: options.model });
+        const translator = new AstMarkdownTranslator(apiKey, {
+            model: options.model,
+            neverTranslatePath: options.neverTranslate,
+            headingAnchors: options.headingAnchors
+        });
 
         // Check if input is a glob pattern (contains wildcards or multiple matches)
         const inputPattern = options.input;

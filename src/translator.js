@@ -46,6 +46,7 @@ class MarkdownTranslator {
         this.modelName = options.model || process.env.ANTHROPIC_MODEL || DEFAULT_MODEL;
         this.maxTokens = DEFAULT_MAX_TOKENS;
         this.sendTemperature = modelAcceptsTemperature(this.modelName);
+        this.emitHeadingAnchors = options.headingAnchors !== false;
 
         const samplingNote = this.sendTemperature ? 'temperature: 0' : 'temperature: model default';
         console.log(chalk.gray(`Using model: ${this.modelName} (${samplingNote})`));
@@ -89,6 +90,33 @@ class MarkdownTranslator {
 
         if (!this.systemPromptTemplate) {
             console.warn(chalk.yellow('⚠️  No system prompt loaded — translation quality will be degraded.'));
+        }
+
+        this.loadProjectNeverTranslateTerms(options.neverTranslatePath);
+    }
+
+    // The built-in never-translate list is StarRocks-scoped. A downstream project needs
+    // its own product nouns and UI labels left alone, so an explicit --never-translate
+    // path, or a .doc-translator/never_translate.yaml in the working directory, is
+    // merged on top of it.
+    loadProjectNeverTranslateTerms(explicitPath) {
+        const candidates = explicitPath ?
+            [explicitPath] :
+            [path.join(process.cwd(), '.doc-translator', 'never_translate.yaml'),
+                path.join(process.cwd(), '.doc-translator', 'never_translate.yml')];
+
+        for (const candidate of candidates) {
+            if (!fs.existsSync(candidate)) {
+                if (explicitPath) {
+                    throw new Error(`never-translate file not found: ${candidate}`);
+                }
+                continue;
+            }
+
+            const terms = this.parseYamlList(fs.readFileSync(candidate, 'utf8'));
+            this.neverTranslateTerms = [...new Set([...this.neverTranslateTerms, ...terms])];
+            console.log(chalk.gray(`Merged ${terms.length} never-translate term(s) from ${candidate}`));
+            return;
         }
     }
 

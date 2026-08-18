@@ -281,6 +281,72 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         }
     }
 
+    // MDX reads `{` as the start of an expression, so a Docusaurus explicit heading id
+    // (`## Title {#id}`) makes the parser throw - including on this tool's own output
+    // once it starts emitting them. Strip them before parsing, keyed by line so they can
+    // be put back on the same headings, and leave fenced code untouched.
+    stripExplicitHeadingIds(content) {
+        const lines = content.split('\n');
+        const idsByLine = new Map();
+        let inCodeBlock = false;
+        let codeFenceChar = '';
+        let codeFenceLen = 0;
+
+        const stripped = lines.map((line, index) => {
+            const fenceMatch = line.trim().match(/^([`~]{3,})/);
+            if (fenceMatch) {
+                if (!inCodeBlock) {
+                    inCodeBlock = true;
+                    codeFenceChar = fenceMatch[1][0];
+                    codeFenceLen = fenceMatch[1].length;
+                } else if (fenceMatch[1][0] === codeFenceChar && fenceMatch[1].length >= codeFenceLen) {
+                    inCodeBlock = false;
+                    codeFenceChar = '';
+                    codeFenceLen = 0;
+                }
+                return line;
+            }
+            if (inCodeBlock) {
+                return line;
+            }
+
+            const headingMatch = line.match(/^(#{1,6}[^\n]*?)\{#([^}\s]+)\}[ \t]*$/);
+            if (!headingMatch) {
+                return line;
+            }
+            idsByLine.set(index + 1, headingMatch[2]);
+            return headingMatch[1].trimEnd();
+        }).join('\n');
+
+        return { content: stripped, idsByLine };
+    }
+
+    // Concatenates the literal text of an inline subtree - used to slug a heading from
+    // its source wording before translation replaces it.
+    getInlineText(node) {
+        if (!node) {
+            return '';
+        }
+        if (node.type === 'text' || node.type === 'inlineCode') {
+            return node.value || '';
+        }
+        if (Array.isArray(node.children)) {
+            return node.children.map(child => this.getInlineText(child)).join('');
+        }
+        return '';
+    }
+
+    // Approximates github-slugger, which is what Docusaurus uses to derive heading ids.
+    slugifyHeading(text) {
+        return text
+        .trim()
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s-]/gu, '')
+        .replace(/\s+/g, '-')
+        .replace(/-{2,}/g, '-')
+        .replace(/^-|-$/g, '');
+    }
+
     // Inline nodes that can be rendered back into a translatable run. Anything absent
     // here still breaks the run, so images, hard breaks, and inline JSX keep their
     // previous handling.
@@ -369,7 +435,8 @@ class AstMarkdownTranslator extends MarkdownTranslator {
     extractTranslatableContent(content) {
         const parser = this.createAstParser();
         const stringifier = this.createAstStringifier();
-        const tree = parser.parse(content);
+        const { content: parseableContent, idsByLine } = this.stripExplicitHeadingIds(content);
+        const tree = parser.parse(parseableContent);
 
         const entries = [];
         const inlinePlaceholders = [];
@@ -444,7 +511,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                 }
 
                 const combinedText = run
-                .map(runChild => this.serializeInlineRunNode(runChild, protect, content))
+                .map(runChild => this.serializeInlineRunNode(runChild, protect, parseableContent))
                 .join('');
 
                 registerEntry(combinedText, (entryPlaceholder) => {
@@ -459,7 +526,32 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             }
         };
 
+        // Issue #3 §5: a translated heading changes the Docusaurus slug and silently
+        // breaks every inbound #anchor. Emitting the source-language slug as an explicit
+        // id keeps those links alive through any rewording. Slugs are taken before
+        // extraction replaces the heading text, and the anchor itself is protected so
+        // the model never sees it.
+        const headingAnchors = new Map();
+        if (this.emitHeadingAnchors) {
+            visit(tree, 'heading', (node) => {
+                const headingText = this.getInlineText(node);
+                if (!headingText.trim()) {
+                    return;
+                }
+                // An id the author already set wins over a derived one.
+                const existingId = idsByLine.get(node.position?.start?.line);
+                const slug = existingId || this.slugifyHeading(headingText);
+                if (slug) {
+                    headingAnchors.set(node, slug);
+                }
+            });
+        }
+
         processChildrenForInlineCodeContext(tree);
+
+        for (const [node, slug] of headingAnchors) {
+            node.children.push({ type: 'text', value: protect('ANCHOR', ` {#${slug}}`) });
+        }
 
         // Translate description and sidebar_label values in YAML frontmatter.
         // All other frontmatter keys (including their values) are preserved exactly.
@@ -899,38 +991,184 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return output;
     }
 
-    warnTableColumnMismatches(content, inputPath, outputPath) {
-        const lines = content.split('\n');
-        let expectedCols = null;
-        let warned = false;
+    // Any placeholder still present in the output means a protected fragment was never
+    // restored - the content it stood for is gone.
+    findPlaceholderLeaks(content) {
+        const matches = content.match(/__MTX_\w+__/g) || [];
+        return [...new Set(matches)];
+    }
 
-        lines.forEach((line, i) => {
+    // Structural checks that run against every real translation, not just the fixture.
+    // A table problem the source already has is not a translation defect, so only
+    // problems the translation introduced are reported.
+    findStructuralFailures(sourceContent, translatedContent) {
+        const failures = [];
+
+        const sourceTableProblems = this.findTableStructureProblems(sourceContent).length;
+        const translatedTableProblems = this.findTableStructureProblems(translatedContent);
+        if (translatedTableProblems.length > sourceTableProblems) {
+            for (const problem of translatedTableProblems) {
+                failures.push(`line ${problem.line}: ${problem.message}`);
+            }
+        }
+
+        for (const placeholder of this.findPlaceholderLeaks(translatedContent)) {
+            failures.push(`unrestored placeholder ${placeholder}`);
+        }
+
+        return failures;
+    }
+
+    // Issue #3 §5: fragment-level translation invited clauses coming back twice. A run
+    // of at least minLength characters repeating inside one item is the signature.
+    // Heuristic, so it warns rather than failing.
+    findRepeatedSubstring(text, minLength) {
+        for (let i = 0; i + minLength <= text.length; i++) {
+            const candidate = text.slice(i, i + minLength);
+            if (candidate.trim().length < minLength) {
+                continue;
+            }
+            if (text.indexOf(candidate, i + minLength) !== -1) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    findDuplicatedSegments(translatedEntries, minLength = 20) {
+        const warnings = [];
+
+        for (const entry of translatedEntries) {
+            const text = (entry.text || '').trim();
+            // Multi-line items are whole tables (pipe tables are not parsed as tables
+            // here), where repeated delimiter runs are expected rather than suspicious.
+            if (text.includes('\n') || text.length < minLength * 2) {
+                continue;
+            }
+            const repeated = this.findRepeatedSubstring(text, minLength);
+            if (repeated) {
+                warnings.push(`entry id ${entry.id} repeats "${repeated}"`);
+            }
+        }
+
+        return warnings;
+    }
+
+    // Issue #3 §5: one page rendered the same UI label three different ways. Identical
+    // short source strings should map to identical translations within a file; long
+    // prose legitimately varies with context, so only short strings are compared.
+    findGlossaryInconsistencies(sourceEntries, translatedEntries, maxSourceLength = 60) {
+        const translationById = new Map(translatedEntries.map(entry => [entry.id, entry.text]));
+        const variantsBySource = new Map();
+
+        for (const entry of sourceEntries) {
+            const translation = translationById.get(entry.id);
+            if (translation === undefined) {
+                continue;
+            }
+            const source = (entry.text || '').trim();
+            if (source.length === 0 || source.length > maxSourceLength) {
+                continue;
+            }
+            if (!variantsBySource.has(source)) {
+                variantsBySource.set(source, new Set());
+            }
+            variantsBySource.get(source).add(translation.trim());
+        }
+
+        const warnings = [];
+        for (const [source, variants] of variantsBySource) {
+            if (variants.size > 1) {
+                const rendered = [...variants].map(variant => `"${variant}"`).join(', ');
+                warnings.push(`"${source}" was translated ${variants.size} different ways: ${rendered}`);
+            }
+        }
+
+        return warnings;
+    }
+
+    // Structural validation for pipe tables. A dropped leading or trailing pipe is the
+    // failure that has actually shipped (markdownlint MD055/MD056 caught it downstream
+    // after this code did not), so these are errors, not warnings, and the caller fails
+    // the run on them.
+    findTableStructureProblems(content) {
+        const lines = content.split('\n');
+        const problems = [];
+        let expectedCols = null;
+        let inCodeBlock = false;
+        let codeFenceChar = '';
+        let codeFenceLen = 0;
+
+        lines.forEach((line, index) => {
             const trimmed = line.trim();
-            if (!trimmed.startsWith('|')) {
+            const lineNumber = index + 1;
+
+            const fenceMatch = trimmed.match(/^([`~]{3,})/);
+            if (fenceMatch) {
+                if (!inCodeBlock) {
+                    inCodeBlock = true;
+                    codeFenceChar = fenceMatch[1][0];
+                    codeFenceLen = fenceMatch[1].length;
+                } else if (fenceMatch[1][0] === codeFenceChar && fenceMatch[1].length >= codeFenceLen) {
+                    inCodeBlock = false;
+                    codeFenceChar = '';
+                    codeFenceLen = 0;
+                }
                 expectedCols = null;
                 return;
             }
+            if (inCodeBlock) {
+                return;
+            }
+
+            // A blank line ends the table; anything after it is unrelated content.
+            if (trimmed === '') {
+                expectedCols = null;
+                return;
+            }
+
+            if (!trimmed.startsWith('|')) {
+                // A non-blank line directly under a table row is precisely a dropped
+                // leading pipe - the row was emitted as two lines.
+                if (expectedCols !== null) {
+                    problems.push({
+                        line: lineNumber,
+                        message: 'table row is missing its leading "|"'
+                    });
+                    expectedCols = null;
+                }
+                return;
+            }
+
             if (/^\|(?:[\s:]*-[\s:-]*\|)+$/.test(trimmed)) {
                 expectedCols = (trimmed.match(/(?<!\\)\|/g) || []).length - 1;
                 return;
             }
-            const cells = trimmed.slice(1, -1).split(/(?<!\\)\|/);
+
+            const endsWithPipe = /(?<!\\)\|$/.test(trimmed);
+            if (!endsWithPipe) {
+                problems.push({
+                    line: lineNumber,
+                    message: 'table row is missing its trailing "|"'
+                });
+            }
+
+            const body = endsWithPipe ? trimmed.slice(1, -1) : trimmed.slice(1);
+            const cells = body.split(/(?<!\\)\|/);
+
             if (expectedCols === null) {
                 expectedCols = cells.length;
                 return;
             }
-            if (cells.length > expectedCols) {
-                console.warn(chalk.yellow(
-                    `[table] Extra column at line ${i + 1} of ${outputPath} ` +
-                    `(expected ${expectedCols}, got ${cells.length}). ` +
-                    'Review manually: node ~/GitHub/doc-translator/bin/cli.js translate ' +
-                    `-s en -i ${inputPath} -l ja -o ${outputPath}`
-                ));
-                warned = true;
+            if (cells.length !== expectedCols) {
+                problems.push({
+                    line: lineNumber,
+                    message: `table row has ${cells.length} column(s), expected ${expectedCols}`
+                });
             }
         });
 
-        return warned;
+        return problems;
     }
 
     fixAdmonitionIndentation(content) {
@@ -1371,6 +1609,14 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             `fallback_chunks=${fallbackChunkCount} fallback_items=${fallbackItemCount}`)
         );
 
+        for (const warning of this.findDuplicatedSegments(translatedEntries)) {
+            console.warn(chalk.yellow(`[duplicate] ${warning}`));
+        }
+
+        for (const warning of this.findGlossaryInconsistencies(entries, translatedEntries)) {
+            console.warn(chalk.yellow(`[glossary] ${warning}`));
+        }
+
         const neverTranslateWarnings = this.validateNeverTranslatePlaceholders(
             translatedEntries,
             neverTranslateReplacements
@@ -1493,7 +1739,13 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                 throw new Error(`Final translation completeness check failed: ${finalMismatches.join('; ')}`);
             }
 
-            this.warnTableColumnMismatches(translated, inputPath, outputPath);
+            const structuralFailures = this.findStructuralFailures(content, translated);
+            if (structuralFailures.length > 0) {
+                for (const failure of structuralFailures) {
+                    console.error(chalk.red(`[structure] ${failure}`));
+                }
+                throw new Error(`Structural validation failed for ${outputPath}: ${structuralFailures.join('; ')}`);
+            }
 
             await fs.ensureDir(path.dirname(outputPath));
             await fs.writeFile(outputPath, translated, 'utf8');

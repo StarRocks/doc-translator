@@ -23,6 +23,10 @@ This code and most of the README are from the team at [PlayCanvas](https://githu
   -k, --key <apikey>      Anthropic API key (or set ANTHROPIC_API_KEY env var)
   -m, --model <model>     Claude model to use (or set ANTHROPIC_MODEL env var;
                           default: claude-sonnet-5)
+  --never-translate <path>  Extra never-translate YAML list, merged over the
+                          built-in one (default: .doc-translator/never_translate.yaml)
+  --no-heading-anchors    Do not emit the source-language slug as an explicit
+                          heading id
   --flat                  Use flat structure in output directory (default:
                           preserve structure)
   --suffix <suffix>       Custom suffix for output files (default: language
@@ -192,6 +196,45 @@ Two notes on model selection:
 - `max_tokens` is 16000. Claude 5 models run adaptive thinking by default and thinking
   tokens count against that cap, so it needs the headroom. If you select an older model
   with a lower output limit, reduce `DEFAULT_MAX_TOKENS` in `src/translator.js`.
+
+## Validation
+
+Every translation is validated, not just the `examples/` fixture.
+
+**These fail the run** and write the output to a `.invalid` file instead:
+
+- a table row missing its leading or trailing `|`, or carrying the wrong number of
+  columns — the failure that shipped a broken Japanese table past both checkers
+- a table row split across two lines, which is what a dropped leading pipe looks like
+- an unrestored `__MTX_…__` placeholder, meaning protected content was lost
+
+A problem the source file already has is not counted against the translation.
+
+**These warn** — they are heuristics, so they inform rather than block:
+
+- `[duplicate]` — a translated item repeating a run of 20+ characters
+- `[glossary]` — one short source string translated more than one way in the same file
+
+## Heading anchors
+
+Translating a heading changes its Docusaurus slug and silently breaks every inbound
+`#anchor`. By default the source-language slug is emitted as an explicit id, so anchors
+survive any rewording:
+
+```md
+### 終了保護を有効または無効にする {#enable-or-disable-termination-protection}
+```
+
+An id the author set explicitly is preserved as-is. Pass `--no-heading-anchors` to turn
+this off.
+
+## Project-local never-translate list
+
+`src/configs/never_translate.yaml` is StarRocks-scoped. A downstream project can add its
+own product nouns and UI labels — necessary when the UI ships in English only and a
+translated label no longer matches the screen. Either put them in
+`.doc-translator/never_translate.yaml` in the directory you run from, or pass
+`--never-translate <path>`. The list is merged over the built-in one.
 
 ## Usage
 

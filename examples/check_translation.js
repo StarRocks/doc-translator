@@ -200,9 +200,15 @@ function checkLinkUrls(src, trn) {
     return result('Link URLs', false, `${mismatches.length} URL(s) changed`, mismatches.slice(0, 5).join('\n'));
 }
 
+// <br/> and <br /> render identically, so comparing them byte-exact reports a
+// difference that does not matter and trains readers to ignore the output.
+function normalizeHtmlTag(tag) {
+    return tag.replace(/\s+/g, ' ').replace(/\s*\/>$/, '/>').replace(/<\s+/, '<');
+}
+
 function checkHtmlInTableCells(src, trn) {
-    const srcTags = extractHtmlTagsFromTableLines(src);
-    const trnTags = extractHtmlTagsFromTableLines(trn);
+    const srcTags = extractHtmlTagsFromTableLines(src).map(normalizeHtmlTag);
+    const trnTags = extractHtmlTagsFromTableLines(trn).map(normalizeHtmlTag);
 
     const freq = arr => arr.reduce((m, v) => { m[v] = (m[v] || 0) + 1; return m; }, {});
     const srcFreq = freq(srcTags);
@@ -325,11 +331,40 @@ function checkTableColumnCounts(src, trn) {
         const counts = [];
         for (const line of linesOutsideCode(content)) {
             const trimmed = line.trim();
-            if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) continue;
+            if (!trimmed.startsWith('|')) continue;
             if (/^\|[\s|:-]+\|$/.test(trimmed)) continue; // separator row
-            counts.push(trimmed.slice(1, -1).split('|').length);
+            // A row missing its trailing pipe still has to be counted, or the damage
+            // is invisible: the previous version skipped the line entirely.
+            const body = trimmed.endsWith('|') ? trimmed.slice(1, -1) : trimmed.slice(1);
+            counts.push(body.split('|').length);
         }
         return counts;
+    }
+
+    // A non-blank line directly under a table row is a dropped leading pipe - the row
+    // was emitted as two lines. Neither the row counts nor the column counts can see
+    // that on their own, because the orphan half is not a table line at all.
+    function orphanedRowLines(content) {
+        const orphans = [];
+        let inTable = false;
+        let lineNumber = 0;
+        for (const line of linesOutsideCode(content)) {
+            lineNumber += 1;
+            const trimmed = line.trim();
+            if (trimmed === '') { inTable = false; continue; }
+            if (trimmed.startsWith('|')) { inTable = true; continue; }
+            if (inTable) {
+                orphans.push(`Line ${lineNumber}: "${trimmed.slice(0, 60)}" is missing its leading |`);
+                inTable = false;
+            }
+        }
+        return orphans;
+    }
+
+    const srcOrphans = orphanedRowLines(src).length;
+    const trnOrphans = orphanedRowLines(trn);
+    if (trnOrphans.length > srcOrphans) {
+        return result('Table column counts', false, `${trnOrphans.length} table row(s) split across lines`, trnOrphans.slice(0, 5).join('\n'));
     }
 
     const sc = colCounts(src);
