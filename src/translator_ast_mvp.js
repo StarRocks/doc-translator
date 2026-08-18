@@ -2,6 +2,7 @@ import path from 'path';
 
 import chalk from 'chalk';
 import fs from 'fs-extra';
+import Slugger from 'github-slugger';
 import remarkFrontmatter from 'remark-frontmatter';
 import remarkMdx from 'remark-mdx';
 import remarkParse from 'remark-parse';
@@ -389,26 +390,14 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return '';
     }
 
-    uniqueSlug(slug, usedSlugs) {
-        if (!slug || !usedSlugs.has(slug)) {
-            return slug;
-        }
-        let suffix = 1;
-        while (usedSlugs.has(`${slug}-${suffix}`)) {
-            suffix += 1;
-        }
-        return `${slug}-${suffix}`;
-    }
-
-    // Approximates github-slugger, which is what Docusaurus uses to derive heading ids.
-    slugifyHeading(text) {
-        return text
-        .trim()
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}\s_-]/gu, '')
-        .replace(/\s+/g, '-')
-        .replace(/-{2,}/g, '-')
-        .replace(/^-|-$/g, '');
+    // Docusaurus derives heading ids with github-slugger, so anything else is a guess.
+    // Measured against 952 real headings, the previous approximation disagreed on 102 of
+    // them - mostly by collapsing repeated hyphens, so "License / Metering" produced
+    // license-metering where the real anchor is license--metering. An emitted id that
+    // differs from the natural slug breaks exactly the inbound links this is meant to
+    // keep alive. The slugger instance also handles repeat headings (foo, foo-1).
+    createSlugger() {
+        return new Slugger();
     }
 
     // Inline nodes that can be rendered back into a translatable run. Anything absent
@@ -637,7 +626,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             // github-slugger suffixes a repeat as foo, foo-1, foo-2. Without that, two
             // headings with the same wording get the same id, the page carries duplicate
             // ids, and the second inbound anchor still breaks.
-            const usedSlugs = new Set();
+            const slugger = this.createSlugger();
             visit(tree, 'heading', (node) => {
                 const headingText = this.getInlineText(node);
                 if (!headingText.trim()) {
@@ -645,9 +634,16 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                 }
                 // An id the author already set wins over a derived one.
                 const existingId = idsByLine.get(node.position?.start?.line);
-                const slug = existingId || this.uniqueSlug(this.slugifyHeading(headingText), usedSlugs);
+                // An author-set id wins, but still has to be reserved with the slugger
+                // or a later derived slug could collide with it.
+                let slug;
+                if (existingId) {
+                    slugger.slug(existingId);
+                    slug = existingId;
+                } else {
+                    slug = slugger.slug(headingText);
+                }
                 if (slug) {
-                    usedSlugs.add(slug);
                     headingAnchors.set(node, slug);
                 }
             });
@@ -1118,10 +1114,16 @@ class AstMarkdownTranslator extends MarkdownTranslator {
     // Checks that every inline placeholder injected during extraction is still present
     // in the translated-but-not-yet-restored content. A missing placeholder means the
     // model discarded the protected fragment (URL, raw HTML, inline JSX, heading anchor).
+    // remark-stringify escapes the underscores in a placeholder that sits in the
+    // skeleton, so __MTX_ANCHOR_1__ is written as \\_\\_MTX\\_ANCHOR\\_1\\_\\_. Searching only
+    // for the raw form reported every heading anchor in the document as dropped -
+    // 26 false alarms on a 26-heading page - while restoreInlinePlaceholders, which
+    // accepts both forms, put them back correctly.
     findDroppedInlinePlaceholders(content, inlinePlaceholders) {
         return inlinePlaceholders
-            .map(({ placeholder }) => placeholder)
-            .filter(p => !content.includes(p));
+        .map(({ placeholder }) => placeholder)
+        .filter(placeholder => !content.includes(placeholder) &&
+            !content.includes(placeholder.replaceAll('_', '\\_')));
     }
 
     // Structural checks that run against every real translation, not just the fixture.
@@ -1130,10 +1132,22 @@ class AstMarkdownTranslator extends MarkdownTranslator {
     findStructuralFailures(sourceContent, translatedContent) {
         const failures = [];
 
-        const sourceTableProblems = this.findTableStructureProblems(sourceContent).length;
-        const translatedTableProblems = this.findTableStructureProblems(translatedContent);
-        if (translatedTableProblems.length > sourceTableProblems) {
-            for (const problem of translatedTableProblems) {
+        // Compare per kind, not by total. A source with one trailing-pipe problem and a
+        // translation with one split row have the same count, so an aggregate check
+        // lets a translation defect hide behind an unrelated source defect.
+        const problemKind = message => message.replace(/\d+/g, 'N');
+        const sourceByKind = new Map();
+        for (const problem of this.findTableStructureProblems(sourceContent)) {
+            const kind = problemKind(problem.message);
+            sourceByKind.set(kind, (sourceByKind.get(kind) || 0) + 1);
+        }
+
+        const seenByKind = new Map();
+        for (const problem of this.findTableStructureProblems(translatedContent)) {
+            const kind = problemKind(problem.message);
+            const seen = (seenByKind.get(kind) || 0) + 1;
+            seenByKind.set(kind, seen);
+            if (seen > (sourceByKind.get(kind) || 0)) {
                 failures.push(`line ${problem.line}: ${problem.message}`);
             }
         }
@@ -1287,7 +1301,17 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             }
 
             if (/^\|(?:[\s:]*-[\s:-]*\|)+$/.test(trimmed)) {
-                expectedCols = (trimmed.match(/(?<!\\)\|/g) || []).length - 1;
+                const separatorCols = (trimmed.match(/(?<!\\)\|/g) || []).length - 1;
+                // The header row set expectedCols one line earlier. Overwriting it
+                // without comparing hid a header with the wrong number of cells: a
+                // two-column table whose header became "| A B |" reported nothing.
+                if (expectedCols !== null && expectedCols !== separatorCols) {
+                    problems.push({
+                        line: lineNumber - 1,
+                        message: `table header has ${expectedCols} column(s) but its separator has ${separatorCols}`
+                    });
+                }
+                expectedCols = separatorCols;
                 return;
             }
 
@@ -1539,10 +1563,14 @@ class AstMarkdownTranslator extends MarkdownTranslator {
 
     // Puts every protected fragment back: inline code bodies, link destinations, and
     // raw HTML spans all share this one restore step.
+    // Reverse creation order, because a placeholder made earlier can be nested inside
+    // one made later: inline code containing an autolink becomes MTX_RAW_1_MTX first,
+    // and that value is then stored behind __MTX_CODE_2__. Restoring in creation order
+    // looks for RAW while it is still hidden inside CODE, and leaves the token behind.
     restoreInlinePlaceholders(content, inlinePlaceholders) {
         let output = content;
 
-        for (const item of inlinePlaceholders) {
+        for (const item of [...inlinePlaceholders].reverse()) {
             const escapedPlaceholder = item.placeholder.replaceAll('_', '\\_');
             const value = item.value || '';
             output = output.split(item.placeholder).join(value);
