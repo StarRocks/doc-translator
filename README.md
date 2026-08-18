@@ -21,6 +21,14 @@ This code and most of the README are from the team at [PlayCanvas](https://githu
   -d, --output-dir <dir>  Output directory (for batch translation or single
                           file)
   -k, --key <apikey>      Anthropic API key (or set ANTHROPIC_API_KEY env var)
+  -m, --model <model>     Claude model to use (or set ANTHROPIC_MODEL env var;
+                          default: claude-sonnet-5)
+  --max-tokens <n>        Output token cap per request (or set
+                          ANTHROPIC_MAX_TOKENS; default: 16000)
+  --never-translate <path>  Extra never-translate YAML list, merged over the
+                          built-in one (default: .doc-translator/never_translate.yaml)
+  --no-heading-anchors    Do not emit the source-language slug as an explicit
+                          heading id
   --flat                  Use flat structure in output directory (default:
                           preserve structure)
   --suffix <suffix>       Custom suffix for output files (default: language
@@ -159,6 +167,78 @@ export ANTHROPIC_API_KEY="your-api-key-here"
 doc-translate translate -i file.md -l Spanish --key your-api-key-here
 ```
 
+**Option C: `.env` file**
+
+Copy `.env.example` to `.env` in the directory you run the tool from. `.env` is gitignored,
+and real environment variables take precedence over it.
+
+```bash
+ANTHROPIC_API_KEY=your-api-key-here
+```
+
+### 3. Choose a Model (optional)
+
+The default is `claude-sonnet-5`. Override it in either of two places, highest precedence first:
+
+```bash
+# 1. --model / -m flag (wins over everything)
+doc-translate translate -i file.md -l Spanish --model claude-opus-5
+
+# 2. ANTHROPIC_MODEL, exported or set in .env
+export ANTHROPIC_MODEL=claude-opus-5
+```
+
+The resolved model is printed at startup and in the run summary.
+
+Two notes on model selection:
+
+- The Claude 5 generation rejects `temperature`, so the tool only sends `temperature: 0`
+  for older models that accept it (Sonnet 4.6, Opus 4.6, and earlier). This is handled
+  automatically per model.
+- `max_tokens` is 16000. Claude 5 models run adaptive thinking by default and thinking
+  tokens count against that cap, so it needs the headroom. Older models cap lower —
+  Claude 3 Haiku at 4096 — and will reject every request at 16000, so lower it with
+  `--max-tokens` or `ANTHROPIC_MAX_TOKENS` when selecting one.
+
+## Validation
+
+Every translation is validated, not just the `examples/` fixture.
+
+**These fail the run** and write the output to a `.invalid` file instead:
+
+- a table row missing its leading or trailing `|`, or carrying the wrong number of
+  columns — the failure that shipped a broken Japanese table past both checkers
+- a table row split across two lines, which is what a dropped leading pipe looks like
+- an unrestored `__MTX_…__` placeholder, meaning protected content was lost
+
+A problem the source file already has is not counted against the translation.
+
+**These warn** — they are heuristics, so they inform rather than block:
+
+- `[duplicate]` — a translated item repeating a run of 20+ characters
+- `[glossary]` — one short source string translated more than one way in the same file
+
+## Heading anchors
+
+Translating a heading changes its Docusaurus slug and silently breaks every inbound
+`#anchor`. By default the source-language slug is emitted as an explicit id, so anchors
+survive any rewording:
+
+```md
+### 終了保護を有効または無効にする {#enable-or-disable-termination-protection}
+```
+
+An id the author set explicitly is preserved as-is. Pass `--no-heading-anchors` to turn
+this off.
+
+## Project-local never-translate list
+
+`src/configs/never_translate.yaml` is StarRocks-scoped. A downstream project can add its
+own product nouns and UI labels — necessary when the UI ships in English only and a
+translated label no longer matches the screen. Either put them in
+`.doc-translator/never_translate.yaml` in the directory you run from, or pass
+`--never-translate <path>`. The list is merged over the built-in one.
+
 ## Usage
 
 ### Basic Translation
@@ -180,6 +260,21 @@ doc-translate translate -i examples/External_table.md -l Japanese
 ### Batch Processing
 
 The tool supports batch processing of multiple markdown files using glob patterns:
+
+**Always quote the pattern.** An unquoted glob is expanded by your shell before
+`doc-translate` runs, so `--input` receives only the first match and every other path
+arrives as a stray argument:
+
+```bash
+# Wrong - bash/zsh expands this into hundreds of paths
+doc-translate translate -i docs/**/*.md -l en -d ./out/
+
+# Right - the quotes let the tool do the expansion
+doc-translate translate -i "docs/**/*.md" -l en -d ./out/
+```
+
+Also keep the output directory outside the input tree, or a second run will pick up the
+translations from the first one as new source files.
 
 ```bash
 # Translate all .md files in current directory
@@ -209,6 +304,7 @@ Options:
   -o, --output <file>      Output file path (for single file translation)
   -d, --output-dir <dir>   Output directory (for batch translation or single file)
   -k, --key <apikey>       Anthropic API key (optional)
+  -m, --model <model>      Claude model to use (default: claude-sonnet-5)
   --flat                   Use flat structure in output directory (default: preserve structure)
   --suffix <suffix>        Custom suffix for output files (default: language name)
    --log-chunk-metadata     Log API metadata for each chunk
@@ -515,6 +611,7 @@ This project uses **ES modules (ESM)** for modern JavaScript development:
 - `chalk` - Terminal styling
 - `ora` - Progress spinners
 - `fs-extra` - Enhanced file system operations
+- `dotenv` - Loads `.env` from the working directory
 
 ## Contributing
 

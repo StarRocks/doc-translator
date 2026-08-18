@@ -1,26 +1,58 @@
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 import Anthropic from '@anthropic-ai/sdk';
 import chalk from 'chalk';
 import fs from 'fs-extra';
 import { glob } from 'glob';
 
+// Default model used when neither --model nor ANTHROPIC_MODEL is set.
+const DEFAULT_MODEL = 'claude-sonnet-5';
+
+// Default output cap per request. Claude 5 generation models run adaptive thinking by
+// default and thinking tokens count against max_tokens, so this needs headroom beyond
+// the translated JSON itself. Older models with a lower output cap may need it reduced.
+const DEFAULT_MAX_TOKENS = 16000;
+
+// Models that still accept sampling parameters. The Claude 5 generation (plus Opus
+// 4.7/4.8) rejects `temperature` with a 400, and newer models follow that rule, so any
+// model not listed here is called without it.
+const MODELS_ACCEPTING_TEMPERATURE = [
+    'claude-3',
+    'claude-haiku-4-5',
+    'claude-sonnet-4-5',
+    'claude-opus-4-5',
+    'claude-sonnet-4-6',
+    'claude-opus-4-6'
+];
+
+function modelAcceptsTemperature(model) {
+    return MODELS_ACCEPTING_TEMPERATURE.some(prefix => model.startsWith(prefix));
+}
+
 class MarkdownTranslator {
-    constructor(apiKey) {
+    constructor(apiKey, options = {}) {
         if (!apiKey) {
             throw new Error('Anthropic API key is required');
         }
 
         this.apiKey = apiKey;
 
-        this.client = new Anthropic({ apiKey });
+        // maxRetries covers the 429 and 5xx responses (including 529 "Overloaded")
+        // that a long batch run is most likely to hit; the SDK default of 2 is not
+        // enough to ride out a sustained overload.
+        this.client = new Anthropic({ apiKey, maxRetries: 5 });
         this.neverTranslateTerms = [];
-        this.modelName = 'claude-sonnet-4-6';
+        this.modelName = options.model || process.env.ANTHROPIC_MODEL || DEFAULT_MODEL;
+        this.maxTokens = this.resolveMaxTokens(options.maxTokens);
+        this.sendTemperature = modelAcceptsTemperature(this.modelName);
+        this.emitHeadingAnchors = options.headingAnchors !== false;
 
-        console.log(chalk.gray(`Using model: ${this.modelName} (temperature: 0)`));
+        const samplingNote = this.sendTemperature ? 'temperature: 0' : 'temperature: model default';
+        console.log(chalk.gray(`Using model: ${this.modelName} (${samplingNote}, max_tokens: ${this.maxTokens})`));
 
         try {
-            const configsDir = path.join(process.cwd(), 'src', 'configs');
+            const configsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'configs');
             const systemPromptPath = path.join(configsDir, 'system_prompt.txt');
             if (fs.existsSync(systemPromptPath)) {
                 this.systemPromptTemplate = fs.readFileSync(systemPromptPath, 'utf8');
@@ -50,9 +82,57 @@ class MarkdownTranslator {
                     this.neverTranslateTerms = this.parseYamlList(this.neverTranslate);
                 }
             }
-        } catch {
+        } catch (error) {
+            console.warn(chalk.yellow(`⚠️  Could not load translation configs: ${error.message}`));
             this.systemPromptTemplate = this.systemPromptTemplate || null;
             this.languageDictionaries = this.languageDictionaries || {};
+        }
+
+        if (!this.systemPromptTemplate) {
+            console.warn(chalk.yellow('⚠️  No system prompt loaded — translation quality will be degraded.'));
+        }
+
+        this.loadProjectNeverTranslateTerms(options.neverTranslatePath);
+    }
+
+    // 16000 suits the current models, which spend part of the cap on thinking tokens,
+    // but older ones cap lower - Claude 3 Haiku at 4096 - and would reject every
+    // request. Overridable per run so selecting such a model stays possible.
+    resolveMaxTokens(explicitValue) {
+        const raw = explicitValue ?? process.env.ANTHROPIC_MAX_TOKENS;
+        if (raw === undefined || raw === null || raw === '') {
+            return DEFAULT_MAX_TOKENS;
+        }
+
+        const parsed = Number.parseInt(raw, 10);
+        if (!Number.isInteger(parsed) || parsed < 1) {
+            throw new Error(`Invalid max tokens: ${raw}`);
+        }
+        return parsed;
+    }
+
+    // The built-in never-translate list is StarRocks-scoped. A downstream project needs
+    // its own product nouns and UI labels left alone, so an explicit --never-translate
+    // path, or a .doc-translator/never_translate.yaml in the working directory, is
+    // merged on top of it.
+    loadProjectNeverTranslateTerms(explicitPath) {
+        const candidates = explicitPath ?
+            [explicitPath] :
+            [path.join(process.cwd(), '.doc-translator', 'never_translate.yaml'),
+                path.join(process.cwd(), '.doc-translator', 'never_translate.yml')];
+
+        for (const candidate of candidates) {
+            if (!fs.existsSync(candidate)) {
+                if (explicitPath) {
+                    throw new Error(`never-translate file not found: ${candidate}`);
+                }
+                continue;
+            }
+
+            const terms = this.parseYamlList(fs.readFileSync(candidate, 'utf8'));
+            this.neverTranslateTerms = [...new Set([...this.neverTranslateTerms, ...terms])];
+            console.log(chalk.gray(`Merged ${terms.length} never-translate term(s) from ${candidate}`));
+            return;
         }
     }
 
@@ -187,7 +267,9 @@ class MarkdownTranslator {
                 headings += 1;
             }
 
-            if (!inCodeBlock && /^\s*[-*]\s+\S/.test(line)) {
+            // `+` is a valid CommonMark bullet and remark-stringify normalizes every
+            // bullet to `-`, so leaving it out counts a normalized item as a new one.
+            if (!inCodeBlock && /^\s*[-*+]\s+\S/.test(line)) {
                 unorderedListItems += 1;
             }
         }
@@ -248,18 +330,20 @@ class MarkdownTranslator {
 
     getResponseText(response) {
         return response.content
-            .filter(block => block.type === 'text')
-            .map(block => block.text)
-            .join('');
+        .filter(block => block.type === 'text')
+        .map(block => block.text)
+        .join('');
     }
 
     async callModel(userPrompt, systemPrompt) {
         const params = {
             model: this.modelName,
-            max_tokens: 8096,
-            temperature: 0,
+            max_tokens: this.maxTokens,
             messages: [{ role: 'user', content: userPrompt }]
         };
+        if (this.sendTemperature) {
+            params.temperature = 0;
+        }
         if (systemPrompt) {
             params.system = systemPrompt;
         }
@@ -401,4 +485,5 @@ class MarkdownTranslator {
     }
 }
 
+export { DEFAULT_MODEL, DEFAULT_MAX_TOKENS, modelAcceptsTemperature };
 export default MarkdownTranslator;

@@ -34,7 +34,22 @@ class AstMarkdownTranslator extends MarkdownTranslator {
     }
 
     buildInlineCodePlaceholder(id) {
-        return `__MTX_CODE_${id}__`;
+        return this.buildProtectedPlaceholder('CODE', id);
+    }
+
+    // Protected inline fragments share one namespace and one counter: content that must
+    // survive translation byte-exact (inline code, link destinations, raw HTML) is
+    // swapped for one of these before the text reaches the model.
+    buildProtectedPlaceholder(kind, id) {
+        return `__MTX_${kind}_${id}__`;
+    }
+
+    // Placeholders substituted before parsing sit in the document as ordinary text, so
+    // they must survive a parse/stringify round trip. The __MTX_…__ form does not: the
+    // flanking underscores make it strong emphasis, and it comes back as **MTX_…**.
+    // Every underscore here is intraword, which CommonMark never reads as emphasis.
+    buildPreParsePlaceholder(kind, id) {
+        return `MTX_${kind}_${id}_MTX`;
     }
 
     buildNeverTranslatePlaceholder(term) {
@@ -274,15 +289,269 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         }
     }
 
+    // Applies fn to every line outside fenced code.
+    mapLinesOutsideCode(content, fn) {
+        let inCodeBlock = false;
+        let codeFenceChar = '';
+        let codeFenceLen = 0;
+
+        return content.split('\n').map((line) => {
+            const fenceMatch = line.trim().match(/^([`~]{3,})/);
+            if (fenceMatch) {
+                if (!inCodeBlock) {
+                    inCodeBlock = true;
+                    codeFenceChar = fenceMatch[1][0];
+                    codeFenceLen = fenceMatch[1].length;
+                } else if (fenceMatch[1][0] === codeFenceChar && fenceMatch[1].length >= codeFenceLen) {
+                    inCodeBlock = false;
+                    codeFenceChar = '';
+                    codeFenceLen = 0;
+                }
+                return line;
+            }
+            return inCodeBlock ? line : fn(line);
+        }).join('\n');
+    }
+
+    // MDX rejects constructs plain CommonMark accepts. An autolink such as
+    // <https://example.com/a/b> is read as a JSX tag and fails on the `/`, and `{`
+    // opens an expression, so a Docusaurus heading id breaks the parse too. Both are
+    // swapped for placeholders before parsing and restored afterwards.
+    protectMdxHostileSpans(content) {
+        const spans = [];
+        let nextId = 1;
+        const swap = (value) => {
+            const placeholder = this.buildPreParsePlaceholder('RAW', nextId);
+            spans.push({ placeholder, value });
+            nextId += 1;
+            return placeholder;
+        };
+
+        const protectedContent = this.mapLinesOutsideCode(content, line => line
+        .replace(/<[a-z][a-z\d+.-]*:[^\s<>]*>/gi, swap)
+        .replace(/\{#[^}\s]+\}/g, swap));
+
+        return { content: protectedContent, spans };
+    }
+
+    // MDX reads `{` as the start of an expression, so a Docusaurus explicit heading id
+    // (`## Title {#id}`) makes the parser throw - including on this tool's own output
+    // once it starts emitting them. Strip them before parsing, keyed by line so they can
+    // be put back on the same headings, and leave fenced code untouched.
+    stripExplicitHeadingIds(content) {
+        const lines = content.split('\n');
+        const idsByLine = new Map();
+        let inCodeBlock = false;
+        let codeFenceChar = '';
+        let codeFenceLen = 0;
+
+        const stripped = lines.map((line, index) => {
+            const fenceMatch = line.trim().match(/^([`~]{3,})/);
+            if (fenceMatch) {
+                if (!inCodeBlock) {
+                    inCodeBlock = true;
+                    codeFenceChar = fenceMatch[1][0];
+                    codeFenceLen = fenceMatch[1].length;
+                } else if (fenceMatch[1][0] === codeFenceChar && fenceMatch[1].length >= codeFenceLen) {
+                    inCodeBlock = false;
+                    codeFenceChar = '';
+                    codeFenceLen = 0;
+                }
+                return line;
+            }
+            if (inCodeBlock) {
+                return line;
+            }
+
+            const headingMatch = line.match(/^(#{1,6}[^\n]*?)\{#([^}\s]+)\}[ \t]*$/);
+            if (!headingMatch) {
+                return line;
+            }
+            idsByLine.set(index + 1, headingMatch[2]);
+            return headingMatch[1].trimEnd();
+        }).join('\n');
+
+        return { content: stripped, idsByLine };
+    }
+
+    // Concatenates the literal text of an inline subtree - used to slug a heading from
+    // its source wording before translation replaces it.
+    getInlineText(node) {
+        if (!node) {
+            return '';
+        }
+        if (node.type === 'text' || node.type === 'inlineCode') {
+            return node.value || '';
+        }
+        if (Array.isArray(node.children)) {
+            return node.children.map(child => this.getInlineText(child)).join('');
+        }
+        return '';
+    }
+
+    uniqueSlug(slug, usedSlugs) {
+        if (!slug || !usedSlugs.has(slug)) {
+            return slug;
+        }
+        let suffix = 1;
+        while (usedSlugs.has(`${slug}-${suffix}`)) {
+            suffix += 1;
+        }
+        return `${slug}-${suffix}`;
+    }
+
+    // Approximates github-slugger, which is what Docusaurus uses to derive heading ids.
+    slugifyHeading(text) {
+        return text
+        .trim()
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s_-]/gu, '')
+        .replace(/\s+/g, '-')
+        .replace(/-{2,}/g, '-')
+        .replace(/^-|-$/g, '');
+    }
+
+    // Inline nodes that can be rendered back into a translatable run. Anything absent
+    // here still breaks the run, so images, hard breaks, and inline JSX keep their
+    // previous handling.
+    isInlineRunNode(node) {
+        return ['text', 'inlineCode', 'strong', 'emphasis', 'delete', 'link', 'html', 'mdxJsxTextElement']
+        .includes(node?.type);
+    }
+
+    hasSourceOffsets(node) {
+        return Number.isInteger(node?.position?.start?.offset) && Number.isInteger(node?.position?.end?.offset);
+    }
+
+    // A node joins a run only when its whole subtree can be rendered back to Markdown.
+    // Without this an unsupported descendant (an image inside a link, say) would be
+    // silently dropped during serialization.
+    canSerializeInlineRun(node) {
+        if (!this.isInlineRunNode(node)) {
+            return false;
+        }
+        // Inline JSX (<br />, <img />) is protected by copying its source text verbatim,
+        // which only works for a leaf element whose offsets the parser recorded. One
+        // with children would hide their text from the translation.
+        if (node.type === 'mdxJsxTextElement') {
+            return (node.children || []).length === 0 && this.hasSourceOffsets(node);
+        }
+        if (!Array.isArray(node.children)) {
+            return true;
+        }
+        return node.children.every(child => this.canSerializeInlineRun(child));
+    }
+
+    // Whether a node contributes text worth translating, at any depth - a run made only
+    // of code spans, links, and markup has nothing for the model to do.
+    runHasTranslatableText(node) {
+        if (!node) {
+            return false;
+        }
+        if (node.type === 'text') {
+            return this.shouldTranslateValue(node.value);
+        }
+        if (Array.isArray(node.children)) {
+            return node.children.some(child => this.runHasTranslatableText(child));
+        }
+        return false;
+    }
+
+    // Rebuilding a destination from the decoded AST fields changes link syntax: a URL
+    // containing spaces or parentheses needs angle brackets, and emitting it bare stops
+    // the restored text parsing as a link at all. Copy the destination straight out of
+    // the source when the parser recorded offsets, and fall back to a form that is at
+    // least always parseable when it did not.
+    formatLinkDestination(node, source) {
+        const raw = this.sliceLinkDestination(node, source);
+        if (raw !== null) {
+            return raw;
+        }
+
+        const url = node.url || '';
+        const destination = /[\s()<>]/.test(url) ? `<${url.replace(/([<>\\])/g, '\\$1')}>` : url;
+        const title = (node.title || '').replace(/"/g, '\\"');
+        return node.title ? `${destination} "${title}"` : destination;
+    }
+
+    // A link is `[label](destination)`, and CommonMark requires `](` immediately after
+    // the label, so the destination is everything between that and the closing paren.
+    sliceLinkDestination(node, source) {
+        if (typeof source !== 'string' || !this.hasSourceOffsets(node)) {
+            return null;
+        }
+
+        const start = node.position.start.offset;
+        const end = node.position.end.offset;
+        if (source[end - 1] !== ')') {
+            return null;
+        }
+
+        const children = node.children || [];
+        const lastChild = children[children.length - 1];
+        const labelEnd = this.hasSourceOffsets(lastChild) ? lastChild.position.end.offset : start + 1;
+        const open = source.indexOf('](', labelEnd);
+        if (open === -1 || open >= end) {
+            return null;
+        }
+
+        return source.slice(open + 2, end - 1);
+    }
+
+    // Renders an inline node back to Markdown so a whole sentence survives as a single
+    // translatable item. The markup itself stays visible - the model has to be able to
+    // move a bold span or a link where the target language needs it, which is exactly
+    // what it cannot do when each span arrives as its own fragment.
+    serializeInlineRunNode(node, protect, source) {
+        switch (node.type) {
+            case 'text':
+                return node.value || '';
+            case 'inlineCode':
+                return `\`${protect('CODE', node.value || '')}\``;
+            case 'html':
+                return protect('HTML', node.value || '');
+            case 'mdxJsxTextElement':
+                return protect('JSX', source.slice(node.position.start.offset, node.position.end.offset));
+            case 'strong':
+                return `**${this.serializeInlineRunChildren(node, protect, source)}**`;
+            case 'emphasis':
+                return `_${this.serializeInlineRunChildren(node, protect, source)}_`;
+            case 'delete':
+                return `~~${this.serializeInlineRunChildren(node, protect, source)}~~`;
+            case 'link':
+                return `[${this.serializeInlineRunChildren(node, protect, source)}](${protect('URL', this.formatLinkDestination(node, source))})`;
+            default:
+                return '';
+        }
+    }
+
+    serializeInlineRunChildren(node, protect, source) {
+        if (!Array.isArray(node.children)) {
+            return '';
+        }
+        return node.children.map(child => this.serializeInlineRunNode(child, protect, source)).join('');
+    }
+
     extractTranslatableContent(content) {
         const parser = this.createAstParser();
         const stringifier = this.createAstStringifier();
-        const tree = parser.parse(content);
+        const { content: headinglessContent, idsByLine } = this.stripExplicitHeadingIds(content);
+        const { content: parseableContent, spans: hostileSpans } = this.protectMdxHostileSpans(headinglessContent);
+        const tree = parser.parse(parseableContent);
 
         const entries = [];
-        const inlineCodePlaceholders = [];
+        const inlinePlaceholders = [...hostileSpans];
         let nextId = 1;
-        let nextInlineCodeId = 1;
+        let nextPlaceholderId = 1;
+
+        // Registers a fragment that must reach the output byte-exact and returns the
+        // placeholder standing in for it.
+        const protect = (kind, value) => {
+            const placeholder = this.buildProtectedPlaceholder(kind, nextPlaceholderId);
+            inlinePlaceholders.push({ placeholder, value });
+            nextPlaceholderId += 1;
+            return placeholder;
+        };
 
         const registerEntry = (currentValue, assignValue) => {
             if (!this.shouldTranslateValue(currentValue)) {
@@ -311,9 +580,8 @@ class AstMarkdownTranslator extends MarkdownTranslator {
 
             while (index < children.length) {
                 const child = children[index];
-                const isTranslatableRunNode = child?.type === 'text' || child?.type === 'inlineCode';
 
-                if (!isTranslatableRunNode) {
+                if (!this.canSerializeInlineRun(child)) {
                     rebuiltChildren.push(child);
                     index += 1;
                     continue;
@@ -324,12 +592,11 @@ class AstMarkdownTranslator extends MarkdownTranslator {
 
                 while (index < children.length) {
                     const runChild = children[index];
-                    const isRunNode = runChild?.type === 'text' || runChild?.type === 'inlineCode';
-                    if (!isRunNode) {
+                    if (!this.canSerializeInlineRun(runChild)) {
                         break;
                     }
 
-                    if (runChild.type === 'text' && this.shouldTranslateValue(runChild.value)) {
+                    if (this.runHasTranslatableText(runChild)) {
                         hasTranslatableText = true;
                     }
 
@@ -337,25 +604,16 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                     index += 1;
                 }
 
+                // Nothing for the model to do - leave the nodes alone so the recursion
+                // below can still reach anything nested inside them.
                 if (!hasTranslatableText) {
                     rebuiltChildren.push(...run);
                     continue;
                 }
 
-                let combinedText = '';
-                for (const runChild of run) {
-                    if (runChild.type === 'text') {
-                        combinedText += runChild.value || '';
-                    } else {
-                        const inlineCodePlaceholder = this.buildInlineCodePlaceholder(nextInlineCodeId);
-                        inlineCodePlaceholders.push({
-                            placeholder: inlineCodePlaceholder,
-                            value: runChild.value || ''
-                        });
-                        combinedText += `\`${inlineCodePlaceholder}\``;
-                        nextInlineCodeId += 1;
-                    }
-                }
+                const combinedText = run
+                .map(runChild => this.serializeInlineRunNode(runChild, protect, parseableContent))
+                .join('');
 
                 registerEntry(combinedText, (entryPlaceholder) => {
                     rebuiltChildren.push({ type: 'text', value: entryPlaceholder });
@@ -369,7 +627,47 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             }
         };
 
+        // Issue #3 §5: a translated heading changes the Docusaurus slug and silently
+        // breaks every inbound #anchor. Emitting the source-language slug as an explicit
+        // id keeps those links alive through any rewording. Slugs are taken before
+        // extraction replaces the heading text, and the anchor itself is protected so
+        // the model never sees it.
+        const headingAnchors = new Map();
+        if (this.emitHeadingAnchors) {
+            // github-slugger suffixes a repeat as foo, foo-1, foo-2. Without that, two
+            // headings with the same wording get the same id, the page carries duplicate
+            // ids, and the second inbound anchor still breaks.
+            const usedSlugs = new Set();
+            visit(tree, 'heading', (node) => {
+                const headingText = this.getInlineText(node);
+                if (!headingText.trim()) {
+                    return;
+                }
+                // An id the author already set wins over a derived one.
+                const existingId = idsByLine.get(node.position?.start?.line);
+                const slug = existingId || this.uniqueSlug(this.slugifyHeading(headingText), usedSlugs);
+                if (slug) {
+                    usedSlugs.add(slug);
+                    headingAnchors.set(node, slug);
+                }
+            });
+        } else if (idsByLine.size > 0) {
+            // --no-heading-anchors: stripExplicitHeadingIds already removed {#id} from
+            // the source text so the MDX parser can handle it. Re-add author-supplied ids
+            // as protected placeholders so they survive translation unchanged.
+            visit(tree, 'heading', (node) => {
+                const existingId = idsByLine.get(node.position?.start?.line);
+                if (existingId) {
+                    headingAnchors.set(node, existingId);
+                }
+            });
+        }
+
         processChildrenForInlineCodeContext(tree);
+
+        for (const [node, slug] of headingAnchors) {
+            node.children.push({ type: 'text', value: protect('ANCHOR', ` {#${slug}}`) });
+        }
 
         // Translate description and sidebar_label values in YAML frontmatter.
         // All other frontmatter keys (including their values) are preserved exactly.
@@ -419,7 +717,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return {
             skeleton,
             entries,
-            inlineCodePlaceholders
+            inlinePlaceholders
         };
     }
 
@@ -519,6 +817,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             '4) Do not add or remove items.\n' +
             '5) Do not include explanations or markdown code fences.\n' +
             '6) Tokens matching __MTX_CODE_<number>__ are protected placeholders for inline code. Keep them exactly unchanged. Do not translate, split, remove, or rename them.\n' +
+            '   Likewise preserve all other __MTX_<KIND>_<number>__ tokens unchanged (__MTX_URL_*__, __MTX_HTML_*__, __MTX_JSX_*__, __MTX_ANCHOR_*__). These are byte-exact source fragments that must reach the output as-is.\n' +
             '7) Tokens matching __MTX_NEVER_<hexhash>__ (where <hexhash> is an 8-character hexadecimal string like __MTX_NEVER_3fa8c201__) are protected placeholders for never-translate terms. Copy each token character-for-character into your output. Do not alter, simplify, renumber, or replace the hex hash with any other value.\n\n' +
             `Input JSON:\n${payload}`;
 
@@ -809,38 +1108,213 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return output;
     }
 
-    warnTableColumnMismatches(content, inputPath, outputPath) {
-        const lines = content.split('\n');
-        let expectedCols = null;
-        let warned = false;
+    // Any placeholder still present in the output means a protected fragment was never
+    // restored - the content it stood for is gone.
+    findPlaceholderLeaks(content) {
+        const matches = content.match(/__MTX_\w+__|MTX_[A-Z]+_\d+_MTX/g) || [];
+        return [...new Set(matches)];
+    }
 
-        lines.forEach((line, i) => {
+    // Checks that every inline placeholder injected during extraction is still present
+    // in the translated-but-not-yet-restored content. A missing placeholder means the
+    // model discarded the protected fragment (URL, raw HTML, inline JSX, heading anchor).
+    findDroppedInlinePlaceholders(content, inlinePlaceholders) {
+        return inlinePlaceholders
+            .map(({ placeholder }) => placeholder)
+            .filter(p => !content.includes(p));
+    }
+
+    // Structural checks that run against every real translation, not just the fixture.
+    // A table problem the source already has is not a translation defect, so only
+    // problems the translation introduced are reported.
+    findStructuralFailures(sourceContent, translatedContent) {
+        const failures = [];
+
+        const sourceTableProblems = this.findTableStructureProblems(sourceContent).length;
+        const translatedTableProblems = this.findTableStructureProblems(translatedContent);
+        if (translatedTableProblems.length > sourceTableProblems) {
+            for (const problem of translatedTableProblems) {
+                failures.push(`line ${problem.line}: ${problem.message}`);
+            }
+        }
+
+        for (const placeholder of this.findPlaceholderLeaks(translatedContent)) {
+            failures.push(`unrestored placeholder ${placeholder}`);
+        }
+
+        // Output the parser cannot read will not build either. Only report it when the
+        // source itself parsed, so an input this tool never supported is not blamed on
+        // the translation.
+        if (this.parseFailureMessage(sourceContent) === null) {
+            const message = this.parseFailureMessage(translatedContent);
+            if (message !== null) {
+                failures.push(`translated output no longer parses as MDX: ${message}`);
+            }
+        }
+
+        return failures;
+    }
+
+    parseFailureMessage(content) {
+        try {
+            const { content: parseableContent } = this.protectMdxHostileSpans(content);
+            this.createAstParser().parse(parseableContent);
+            return null;
+        } catch (error) {
+            return error.message;
+        }
+    }
+
+    // Issue #3 §5: fragment-level translation invited clauses coming back twice. A run
+    // of at least minLength characters repeating inside one item is the signature.
+    // Heuristic, so it warns rather than failing.
+    findRepeatedSubstring(text, minLength) {
+        for (let i = 0; i + minLength <= text.length; i++) {
+            const candidate = text.slice(i, i + minLength);
+            if (candidate.trim().length < minLength) {
+                continue;
+            }
+            if (text.indexOf(candidate, i + minLength) !== -1) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    findDuplicatedSegments(translatedEntries, minLength = 20) {
+        const warnings = [];
+
+        for (const entry of translatedEntries) {
+            const text = (entry.text || '').trim();
+            // Multi-line items are whole tables (pipe tables are not parsed as tables
+            // here), where repeated delimiter runs are expected rather than suspicious.
+            if (text.includes('\n') || text.length < minLength * 2) {
+                continue;
+            }
+            const repeated = this.findRepeatedSubstring(text, minLength);
+            if (repeated) {
+                warnings.push(`entry id ${entry.id} repeats "${repeated}"`);
+            }
+        }
+
+        return warnings;
+    }
+
+    // Issue #3 §5: one page rendered the same UI label three different ways. Identical
+    // short source strings should map to identical translations within a file; long
+    // prose legitimately varies with context, so only short strings are compared.
+    findGlossaryInconsistencies(sourceEntries, translatedEntries, maxSourceLength = 60) {
+        const translationById = new Map(translatedEntries.map(entry => [entry.id, entry.text]));
+        const variantsBySource = new Map();
+
+        for (const entry of sourceEntries) {
+            const translation = translationById.get(entry.id);
+            if (translation === undefined) {
+                continue;
+            }
+            const source = (entry.text || '').trim();
+            if (source.length === 0 || source.length > maxSourceLength) {
+                continue;
+            }
+            if (!variantsBySource.has(source)) {
+                variantsBySource.set(source, new Set());
+            }
+            variantsBySource.get(source).add(translation.trim());
+        }
+
+        const warnings = [];
+        for (const [source, variants] of variantsBySource) {
+            if (variants.size > 1) {
+                const rendered = [...variants].map(variant => `"${variant}"`).join(', ');
+                warnings.push(`"${source}" was translated ${variants.size} different ways: ${rendered}`);
+            }
+        }
+
+        return warnings;
+    }
+
+    // Structural validation for pipe tables. A dropped leading or trailing pipe is the
+    // failure that has actually shipped (markdownlint MD055/MD056 caught it downstream
+    // after this code did not), so these are errors, not warnings, and the caller fails
+    // the run on them.
+    findTableStructureProblems(content) {
+        const lines = content.split('\n');
+        const problems = [];
+        let expectedCols = null;
+        let inCodeBlock = false;
+        let codeFenceChar = '';
+        let codeFenceLen = 0;
+
+        lines.forEach((line, index) => {
             const trimmed = line.trim();
-            if (!trimmed.startsWith('|')) {
+            const lineNumber = index + 1;
+
+            const fenceMatch = trimmed.match(/^([`~]{3,})/);
+            if (fenceMatch) {
+                if (!inCodeBlock) {
+                    inCodeBlock = true;
+                    codeFenceChar = fenceMatch[1][0];
+                    codeFenceLen = fenceMatch[1].length;
+                } else if (fenceMatch[1][0] === codeFenceChar && fenceMatch[1].length >= codeFenceLen) {
+                    inCodeBlock = false;
+                    codeFenceChar = '';
+                    codeFenceLen = 0;
+                }
                 expectedCols = null;
                 return;
             }
+            if (inCodeBlock) {
+                return;
+            }
+
+            // A blank line ends the table; anything after it is unrelated content.
+            if (trimmed === '') {
+                expectedCols = null;
+                return;
+            }
+
+            if (!trimmed.startsWith('|')) {
+                // A non-blank line directly under a table row is precisely a dropped
+                // leading pipe - the row was emitted as two lines.
+                if (expectedCols !== null) {
+                    problems.push({
+                        line: lineNumber,
+                        message: 'table row is missing its leading "|"'
+                    });
+                    expectedCols = null;
+                }
+                return;
+            }
+
             if (/^\|(?:[\s:]*-[\s:-]*\|)+$/.test(trimmed)) {
                 expectedCols = (trimmed.match(/(?<!\\)\|/g) || []).length - 1;
                 return;
             }
-            const cells = trimmed.slice(1, -1).split(/(?<!\\)\|/);
+
+            const endsWithPipe = /(?<!\\)\|$/.test(trimmed);
+            if (!endsWithPipe) {
+                problems.push({
+                    line: lineNumber,
+                    message: 'table row is missing its trailing "|"'
+                });
+            }
+
+            const body = endsWithPipe ? trimmed.slice(1, -1) : trimmed.slice(1);
+            const cells = body.split(/(?<!\\)\|/);
+
             if (expectedCols === null) {
                 expectedCols = cells.length;
                 return;
             }
-            if (cells.length > expectedCols) {
-                console.warn(chalk.yellow(
-                    `[table] Extra column at line ${i + 1} of ${outputPath} ` +
-                    `(expected ${expectedCols}, got ${cells.length}). ` +
-                    'Review manually: node ~/GitHub/doc-translator/bin/cli.js translate ' +
-                    `-s en -i ${inputPath} -l ja -o ${outputPath}`
-                ));
-                warned = true;
+            if (cells.length !== expectedCols) {
+                problems.push({
+                    line: lineNumber,
+                    message: `table row has ${cells.length} column(s), expected ${expectedCols}`
+                });
             }
         });
 
-        return warned;
+        return problems;
     }
 
     fixAdmonitionIndentation(content) {
@@ -901,111 +1375,123 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return result.join('\n');
     }
 
+    // Removes the cosmetic indentation models add to the children of a JSX block
+    // (<Tabs>, <TabItem>, <details>). An indent shared by every line of a block is a
+    // uniform prefix rather than structure, so removing it preserves relative nesting:
+    // a list or fenced block indented further inside the block keeps its extra indent.
+    // Blocks are dedented as they close, so an inner block is normalized before the
+    // block containing it.
     fixJsxBlockIndentation(content) {
         const lines = content.split('\n');
+        const stack = [];
+        let inCodeBlock = false;
+        let codeFenceChar = '';
+        let codeFenceLen = 0;
+
+        for (let i = 0; i < lines.length; i++) {
+            const trimmed = lines[i].trimStart();
+
+            const fenceMatch = trimmed.match(/^([`~]{3,})/);
+            if (fenceMatch) {
+                if (!inCodeBlock) {
+                    inCodeBlock = true;
+                    codeFenceChar = fenceMatch[1][0];
+                    codeFenceLen = fenceMatch[1].length;
+                } else if (fenceMatch[1][0] === codeFenceChar && fenceMatch[1].length >= codeFenceLen) {
+                    inCodeBlock = false;
+                    codeFenceChar = '';
+                    codeFenceLen = 0;
+                }
+                continue;
+            }
+            if (inCodeBlock) {
+                continue;
+            }
+
+            const top = stack.length > 0 ? stack[stack.length - 1] : null;
+            if (top && new RegExp(`^<\\/${top.tag}\\b`).test(trimmed)) {
+                stack.pop();
+                this.dedentJsxBlockBody(lines, top.startIndex, i, top.openerIndent);
+                // The model sometimes indents the closer to match preceding list content,
+                // which makes MDX read it as list continuation rather than a JSX closer.
+                lines[i] = `${' '.repeat(top.openerIndent)}${trimmed}`;
+                continue;
+            }
+
+            const openerMatch = lines[i].match(/^(\s*)<(Tabs|TabItem|details)[\s>]/);
+            if (openerMatch && !lines[i].trimEnd().endsWith('/>')) {
+                stack.push({
+                    tag: openerMatch[2],
+                    openerIndent: openerMatch[1].length,
+                    startIndex: i
+                });
+            }
+        }
+
+        return this.separateJsxClosers(lines).join('\n');
+    }
+
+    // Strips the indentation shared by every non-empty line between a JSX opener and its
+    // closer, down to the opener's own indentation.
+    dedentJsxBlockBody(lines, startIndex, endIndex, openerIndent) {
+        let sharedIndent = null;
+        for (let i = startIndex + 1; i < endIndex; i++) {
+            const trimmed = lines[i].trimStart();
+            if (trimmed.length === 0) {
+                continue;
+            }
+            const indent = lines[i].length - trimmed.length;
+            sharedIndent = sharedIndent === null ? indent : Math.min(sharedIndent, indent);
+        }
+
+        const extra = sharedIndent === null ? 0 : sharedIndent - openerIndent;
+        if (extra <= 0) {
+            return;
+        }
+
+        for (let i = startIndex + 1; i < endIndex; i++) {
+            if (lines[i].trimStart().length > 0) {
+                lines[i] = lines[i].slice(extra);
+            }
+        }
+    }
+
+    // Ensures a blank line precedes every JSX closer so it is not swallowed by a
+    // preceding list, paragraph, or admonition block.
+    separateJsxClosers(lines) {
         const result = [];
-        const blockStack = []; // { tag, openerIndent, addedIndent }
         let inCodeBlock = false;
         let codeFenceChar = '';
         let codeFenceLen = 0;
 
         for (const line of lines) {
-            const top = blockStack.length > 0 ? blockStack[blockStack.length - 1] : null;
+            const trimmed = line.trimStart();
 
-            // Strip the current top block's addedIndent from this line (if already known)
-            let processedLine = line;
-            if (top && top.addedIndent !== null && top.addedIndent > 0) {
-                const trimmed = line.trimStart();
-                if (trimmed.length > 0) {
-                    const indent = line.length - trimmed.length;
-                    if (indent >= top.addedIndent) {
-                        processedLine = line.slice(top.addedIndent);
-                    }
-                }
-            }
-
-            if (!inCodeBlock) {
-                const processedTrimmed = processedLine.trimStart();
-
-                // Check for closing tag of the top block
-                if (top && new RegExp(`^<\\/${top.tag}\\b`).test(processedTrimmed)) {
-                    blockStack.pop();
-                    // Always emit the closer at the opener's indentation level (the model
-                    // sometimes indents </TabItem> to match preceding list content, which
-                    // makes MDX parse it as list continuation rather than a JSX closer).
-                    const normalizedCloser = `${' '.repeat(top.openerIndent)}${processedLine.trimStart()}`;
-                    // Ensure a blank line precedes the closer so it isn't swallowed by a
-                    // preceding list, paragraph, or admonition block.
-                    if (result.length > 0 && result[result.length - 1].trim() !== '') {
-                        result.push('');
-                    }
-                    result.push(normalizedCloser);
-                    continue;
-                }
-
-                // Detect addedIndent from the first non-empty line inside the block.
-                // If the first line looks like intentionally structured markdown
-                // (e.g. nested list, blockquote, fenced code, nested JSX), preserve it.
-                if (top && top.addedIndent === null && processedTrimmed.length > 0) {
-                    // processedLine === line here (addedIndent was null so no stripping happened above)
-                    const rawIndent = line.length - line.trimStart().length;
-                    const detected = rawIndent > top.openerIndent ? rawIndent - top.openerIndent : 0;
-                    const startsStructuredMarkdown = /^(?:[-*+]\s|\d+[.)]\s|>\s|:::[\w-]+|[`~]{3,}|<\/?[A-Z][^>]*>|<\/?[a-z][^>]*>)/.test(processedTrimmed);
-                    // Four leading spaces in markdown commonly indicate intentional
-                    // nested structure (e.g. indented code/list content), so keep it.
-                    const normalized = (startsStructuredMarkdown || detected >= 4) ? 0 : detected;
-                    top.addedIndent = normalized;
-                    if (normalized > 0 && rawIndent >= normalized) {
-                        processedLine = line.slice(normalized);
-                    }
-                }
-
-                // Check for a new JSX block opener (Tabs, TabItem, or details)
-                const openerMatch = processedLine.match(/^(\s*)<(Tabs|TabItem|details)[\s>]/);
-                if (openerMatch && !processedLine.trimEnd().endsWith('/>')) {
-                    const innerTrimmed = processedLine.trimStart();
-                    blockStack.push({
-                        tag: openerMatch[2],
-                        openerIndent: processedLine.length - innerTrimmed.length,
-                        addedIndent: null
-                    });
-                    result.push(processedLine);
-                    continue;
-                }
-
-                // Track code fence openings
-                const fenceM = processedLine.match(/^(\s*)([`~]{3,})/);
-                if (fenceM) {
+            const fenceMatch = trimmed.match(/^([`~]{3,})/);
+            if (fenceMatch) {
+                if (!inCodeBlock) {
                     inCodeBlock = true;
-                    codeFenceChar = fenceM[2][0];
-                    codeFenceLen = fenceM[2].length;
-                    result.push(processedLine);
-                    continue;
+                    codeFenceChar = fenceMatch[1][0];
+                    codeFenceLen = fenceMatch[1].length;
+                } else if (fenceMatch[1][0] === codeFenceChar && fenceMatch[1].length >= codeFenceLen) {
+                    inCodeBlock = false;
+                    codeFenceChar = '';
+                    codeFenceLen = 0;
                 }
-
-                // Empty lines: output the original line (nothing to strip)
-                if (!processedTrimmed) {
-                    result.push(line);
-                } else {
-                    result.push(processedLine);
-                }
-            } else {
-                // Inside a code block: track fence closing, still apply parent stripping
-                const fenceM = processedLine.match(/^(\s*)([`~]{3,})/);
-                if (fenceM) {
-                    const ch = fenceM[2][0];
-                    const len = fenceM[2].length;
-                    if (ch === codeFenceChar && len >= codeFenceLen) {
-                        inCodeBlock = false;
-                        codeFenceChar = '';
-                        codeFenceLen = 0;
-                    }
-                }
-                result.push(processedLine);
+                result.push(line);
+                continue;
             }
+
+            if (!inCodeBlock &&
+                /^<\/(?:Tabs|TabItem|details)\b/.test(trimmed) &&
+                result.length > 0 &&
+                result[result.length - 1].trim() !== '') {
+                result.push('');
+            }
+            result.push(line);
         }
 
-        return result.join('\n');
+        return result;
     }
 
     fixHtmlTableNewlines(content) {
@@ -1051,14 +1537,16 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         );
     }
 
-    restoreInlineCodePlaceholders(content, inlineCodePlaceholders) {
+    // Puts every protected fragment back: inline code bodies, link destinations, and
+    // raw HTML spans all share this one restore step.
+    restoreInlinePlaceholders(content, inlinePlaceholders) {
         let output = content;
 
-        for (const item of inlineCodePlaceholders) {
+        for (const item of inlinePlaceholders) {
             const escapedPlaceholder = item.placeholder.replaceAll('_', '\\_');
-            const inlineCodeValue = item.value || '';
-            output = output.split(item.placeholder).join(inlineCodeValue);
-            output = output.split(escapedPlaceholder).join(inlineCodeValue);
+            const value = item.value || '';
+            output = output.split(item.placeholder).join(value);
+            output = output.split(escapedPlaceholder).join(value);
         }
 
         return output;
@@ -1122,10 +1610,23 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         });
     }
 
+    // Cosmetic pass, so a document this parser cannot read must not sink a translation
+    // that is otherwise complete - findStructuralFailures reports unparseable output
+    // separately, with the parser's own message.
     normalizeEnglishInlineCodeSpacing(content) {
+        try {
+            return this.applyEnglishInlineCodeSpacing(content);
+        } catch (error) {
+            console.warn(chalk.yellow(`[spacing] skipped inline-code spacing pass: ${error.message}`));
+            return content;
+        }
+    }
+
+    applyEnglishInlineCodeSpacing(content) {
         const parser = this.createAstParser();
         const stringifier = this.createAstStringifier();
-        const tree = parser.parse(content);
+        const { content: parseableContent, spans } = this.protectMdxHostileSpans(content);
+        const tree = parser.parse(parseableContent);
 
         const shouldAddTrailingSpace = value => /[a-z0-9]$/i.test(value) && !/\s$/.test(value);
         const shouldAddLeadingSpace = value => /^[a-z0-9]/i.test(value) && !/^\s/.test(value);
@@ -1149,7 +1650,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             }
         });
 
-        const normalized = stringifier.stringify(tree);
+        const normalized = this.restoreInlinePlaceholders(stringifier.stringify(tree), spans);
         return normalized.endsWith('\n') ? normalized : `${normalized}\n`;
     }
 
@@ -1161,7 +1662,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         logChunkMetadata = false,
         trace = false
     ) {
-        const { skeleton, entries, inlineCodePlaceholders } = this.extractTranslatableContent(content);
+        const { skeleton, entries, inlinePlaceholders } = this.extractTranslatableContent(content);
         const {
             entries: protectedEntries,
             replacements: neverTranslateReplacements
@@ -1267,6 +1768,14 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             `fallback_chunks=${fallbackChunkCount} fallback_items=${fallbackItemCount}`)
         );
 
+        for (const warning of this.findDuplicatedSegments(translatedEntries)) {
+            console.warn(chalk.yellow(`[duplicate] ${warning}`));
+        }
+
+        for (const warning of this.findGlossaryInconsistencies(entries, translatedEntries)) {
+            console.warn(chalk.yellow(`[glossary] ${warning}`));
+        }
+
         const neverTranslateWarnings = this.validateNeverTranslatePlaceholders(
             translatedEntries,
             neverTranslateReplacements
@@ -1329,7 +1838,17 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         );
 
         let translatedContent = this.restoreTranslatedContent(skeleton, restoredNeverTranslateEntries);
-        translatedContent = this.restoreInlineCodePlaceholders(translatedContent, inlineCodePlaceholders);
+
+        const droppedPlaceholders = this.findDroppedInlinePlaceholders(translatedContent, inlinePlaceholders);
+        if (droppedPlaceholders.length > 0) {
+            console.warn(chalk.red(
+                `[inline-placeholder] ❌ model dropped ${droppedPlaceholders.length} protected fragment` +
+                `${droppedPlaceholders.length === 1 ? '' : 's'} — ` +
+                `output is missing the source content they stood for: ${droppedPlaceholders.join(', ')}`
+            ));
+        }
+
+        translatedContent = this.restoreInlinePlaceholders(translatedContent, inlinePlaceholders);
         translatedContent = this.fixJsxBlockIndentation(translatedContent);
         translatedContent = this.fixAdmonitionIndentation(translatedContent);
         translatedContent = this.fixHtmlTableNewlines(translatedContent);
@@ -1389,7 +1908,13 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                 throw new Error(`Final translation completeness check failed: ${finalMismatches.join('; ')}`);
             }
 
-            this.warnTableColumnMismatches(translated, inputPath, outputPath);
+            const structuralFailures = this.findStructuralFailures(content, translated);
+            if (structuralFailures.length > 0) {
+                for (const failure of structuralFailures) {
+                    console.error(chalk.red(`[structure] ${failure}`));
+                }
+                throw new Error(`Structural validation failed for ${outputPath}: ${structuralFailures.join('; ')}`);
+            }
 
             await fs.ensureDir(path.dirname(outputPath));
             await fs.writeFile(outputPath, translated, 'utf8');

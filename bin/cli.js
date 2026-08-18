@@ -4,10 +4,14 @@ import path from 'path';
 
 import chalk from 'chalk';
 import { Command } from 'commander';
+// Loads .env from the working directory. Existing environment variables win, so an
+// exported ANTHROPIC_API_KEY or ANTHROPIC_MODEL is never overwritten by the file.
+import 'dotenv/config';
 import fs from 'fs-extra';
 import ora from 'ora';
 
 
+import { DEFAULT_MAX_TOKENS, DEFAULT_MODEL } from '../src/translator.js';
 import AstMarkdownTranslator from '../src/translator_ast_mvp.js';
 
 const program = new Command();
@@ -34,14 +38,28 @@ program
 .option('-o, --output <file>', 'Output file path (for single file translation)')
 .option('-d, --output-dir <dir>', 'Output directory (for batch translation or single file)')
 .option('-k, --key <apikey>', 'Anthropic API key (or set ANTHROPIC_API_KEY env var)')
+.option('-m, --model <model>', `Claude model to use (or set ANTHROPIC_MODEL env var; default: ${DEFAULT_MODEL})`)
+.option('--max-tokens <n>', `Output token cap per request (or set ANTHROPIC_MAX_TOKENS; default: ${DEFAULT_MAX_TOKENS}). Lower it for older models that cap below this.`)
+.option('--never-translate <path>', 'Extra never-translate YAML list, merged over the built-in one (default: .doc-translator/never_translate.yaml if present)')
+.option('--no-heading-anchors', 'Do not emit the source-language slug as an explicit heading id')
 .option('--flat', 'Use flat structure in output directory (default: preserve structure)')
 .option('--suffix <suffix>', 'Custom suffix for output files (default: language name)')
 .option('--log-chunk-metadata', 'Log API metadata for each chunk')
 .option('--trace', 'Log per-ID source text sent and translated text received')
-.action(async (options) => {
+.argument('[extraInputs...]', 'Extra paths (usually means the shell expanded an unquoted glob)')
+.action(async (extraInputs, options) => {
     console.log(chalk.cyan(banner));
 
     try {
+        // An unquoted glob is expanded by the shell before doc-translate runs, so -i
+        // receives only the first match and every other path arrives as a stray operand.
+        if (extraInputs.length > 0) {
+            console.error(chalk.red(`❌ Error: received ${extraInputs.length + 1} input paths, but --input takes a single path or pattern.`));
+            console.log(chalk.yellow('Your shell expanded the glob before doc-translate saw it. Quote the pattern so the tool expands it:'));
+            console.log(chalk.white('     doc-translate translate -i "docs/**/*.md" -l en -d out'));
+            process.exit(1);
+        }
+
         // Get API key from options or environment
         const apiKey = options.key || process.env.ANTHROPIC_API_KEY;
         if (!apiKey) {
@@ -54,8 +72,13 @@ program
             console.log(chalk.yellow('⚠️  --trace enabled: full per-ID source/translation content will be logged. Handle logs cautiously.'));
         }
 
-        // Initialize translator
-        const translator = new AstMarkdownTranslator(apiKey);
+        // Initialize translator. Precedence: --model, then ANTHROPIC_MODEL, then the default.
+        const translator = new AstMarkdownTranslator(apiKey, {
+            model: options.model,
+            maxTokens: options.maxTokens,
+            neverTranslatePath: options.neverTranslate,
+            headingAnchors: options.headingAnchors
+        });
 
         // Check if input is a glob pattern (contains wildcards or multiple matches)
         const inputPattern = options.input;
@@ -82,6 +105,7 @@ program
             console.log(chalk.gray(`   Source:   ${options.source || 'English'}`));
             console.log(chalk.gray(`   Language: ${options.language}`));
             console.log(chalk.gray(`   Structure: ${options.flat ? 'Flat' : 'Preserved'}`));
+            console.log(chalk.gray(`   Model:    ${translator.modelName}`));
             console.log(chalk.gray('   Mode: AST'));
             console.log('');
 
@@ -180,6 +204,7 @@ program
             console.log(chalk.gray(`   Output:   ${outputPath}`));
             console.log(chalk.gray(`   Source:   ${options.source || 'English'}`));
             console.log(chalk.gray(`   Language: ${options.language}`));
+            console.log(chalk.gray(`   Model:    ${translator.modelName}`));
             console.log(chalk.gray('   Mode:     AST'));
             console.log('');
 
@@ -272,7 +297,16 @@ program
     console.log(chalk.gray('   Option B - Command line argument:'));
     console.log(chalk.white('     doc-translate translate -i file.md -l Spanish --key your-api-key-here'));
     console.log('');
-    console.log(chalk.yellow('3. Start translating:'));
+    console.log(chalk.gray('   Option C - .env file in the working directory:'));
+    console.log(chalk.white('     ANTHROPIC_API_KEY=your-api-key-here'));
+    console.log('');
+    console.log(chalk.yellow(`3. Optionally pick a model (default: ${DEFAULT_MODEL}):`));
+    console.log(chalk.gray('   Environment variable or .env:'));
+    console.log(chalk.white('     ANTHROPIC_MODEL=claude-opus-5'));
+    console.log(chalk.gray('   Command line argument (wins over both):'));
+    console.log(chalk.white('     doc-translate translate -i file.md -l Spanish --model claude-opus-5'));
+    console.log('');
+    console.log(chalk.yellow('4. Start translating:'));
     console.log(chalk.white('     doc-translate translate -i README.md -l Spanish'));
     console.log('');
     console.log(chalk.blue('📚 For more help: doc-translate --help'));
