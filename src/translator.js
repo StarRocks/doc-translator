@@ -251,7 +251,9 @@ class MarkdownTranslator {
                 headings += 1;
             }
 
-            if (!inCodeBlock && /^\s*[-*]\s+\S/.test(line)) {
+            // `+` is a valid CommonMark bullet and remark-stringify normalizes every
+            // bullet to `-`, so leaving it out counts a normalized item as a new one.
+            if (!inCodeBlock && /^\s*[-*+]\s+\S/.test(line)) {
                 unorderedListItems += 1;
             }
         }

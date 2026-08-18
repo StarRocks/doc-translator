@@ -320,8 +320,9 @@ function checkNeverTranslateTerms(src, trn) {
 }
 
 function checkListItemCount(src, trn) {
-    const s = countMatchingLines(src, /^\s*[-*]\s+\S/);
-    const t = countMatchingLines(trn, /^\s*[-*]\s+\S/);
+    // `+` is a valid CommonMark bullet, normalized to `-` on output.
+    const s = countMatchingLines(src, /^\s*[-*+]\s+\S/);
+    const t = countMatchingLines(trn, /^\s*[-*+]\s+\S/);
     if (s === t) return result('Unordered list items', true, `${s} item(s)`);
     return result('Unordered list items', false, `Expected ${s}, got ${t}`);
 }

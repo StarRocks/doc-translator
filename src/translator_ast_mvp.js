@@ -44,6 +44,14 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return `__MTX_${kind}_${id}__`;
     }
 
+    // Placeholders substituted before parsing sit in the document as ordinary text, so
+    // they must survive a parse/stringify round trip. The __MTX_…__ form does not: the
+    // flanking underscores make it strong emphasis, and it comes back as **MTX_…**.
+    // Every underscore here is intraword, which CommonMark never reads as emphasis.
+    buildPreParsePlaceholder(kind, id) {
+        return `MTX_${kind}_${id}_MTX`;
+    }
+
     buildNeverTranslatePlaceholder(term) {
         let hash = 0;
         for (let i = 0; i < term.length; i++) {
@@ -281,6 +289,51 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         }
     }
 
+    // Applies fn to every line outside fenced code.
+    mapLinesOutsideCode(content, fn) {
+        let inCodeBlock = false;
+        let codeFenceChar = '';
+        let codeFenceLen = 0;
+
+        return content.split('\n').map((line) => {
+            const fenceMatch = line.trim().match(/^([`~]{3,})/);
+            if (fenceMatch) {
+                if (!inCodeBlock) {
+                    inCodeBlock = true;
+                    codeFenceChar = fenceMatch[1][0];
+                    codeFenceLen = fenceMatch[1].length;
+                } else if (fenceMatch[1][0] === codeFenceChar && fenceMatch[1].length >= codeFenceLen) {
+                    inCodeBlock = false;
+                    codeFenceChar = '';
+                    codeFenceLen = 0;
+                }
+                return line;
+            }
+            return inCodeBlock ? line : fn(line);
+        }).join('\n');
+    }
+
+    // MDX rejects constructs plain CommonMark accepts. An autolink such as
+    // <https://example.com/a/b> is read as a JSX tag and fails on the `/`, and `{`
+    // opens an expression, so a Docusaurus heading id breaks the parse too. Both are
+    // swapped for placeholders before parsing and restored afterwards.
+    protectMdxHostileSpans(content) {
+        const spans = [];
+        let nextId = 1;
+        const swap = (value) => {
+            const placeholder = this.buildPreParsePlaceholder('RAW', nextId);
+            spans.push({ placeholder, value });
+            nextId += 1;
+            return placeholder;
+        };
+
+        const protectedContent = this.mapLinesOutsideCode(content, line => line
+        .replace(/<[a-z][a-z\d+.-]*:[^\s<>]*>/gi, swap)
+        .replace(/\{#[^}\s]+\}/g, swap));
+
+        return { content: protectedContent, spans };
+    }
+
     // MDX reads `{` as the start of an expression, so a Docusaurus explicit heading id
     // (`## Title {#id}`) makes the parser throw - including on this tool's own output
     // once it starts emitting them. Strip them before parsing, keyed by line so they can
@@ -435,11 +488,12 @@ class AstMarkdownTranslator extends MarkdownTranslator {
     extractTranslatableContent(content) {
         const parser = this.createAstParser();
         const stringifier = this.createAstStringifier();
-        const { content: parseableContent, idsByLine } = this.stripExplicitHeadingIds(content);
+        const { content: headinglessContent, idsByLine } = this.stripExplicitHeadingIds(content);
+        const { content: parseableContent, spans: hostileSpans } = this.protectMdxHostileSpans(headinglessContent);
         const tree = parser.parse(parseableContent);
 
         const entries = [];
-        const inlinePlaceholders = [];
+        const inlinePlaceholders = [...hostileSpans];
         let nextId = 1;
         let nextPlaceholderId = 1;
 
@@ -994,7 +1048,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
     // Any placeholder still present in the output means a protected fragment was never
     // restored - the content it stood for is gone.
     findPlaceholderLeaks(content) {
-        const matches = content.match(/__MTX_\w+__/g) || [];
+        const matches = content.match(/__MTX_\w+__|MTX_[A-Z]+_\d+_MTX/g) || [];
         return [...new Set(matches)];
     }
 
@@ -1016,7 +1070,27 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             failures.push(`unrestored placeholder ${placeholder}`);
         }
 
+        // Output the parser cannot read will not build either. Only report it when the
+        // source itself parsed, so an input this tool never supported is not blamed on
+        // the translation.
+        if (this.parseFailureMessage(sourceContent) === null) {
+            const message = this.parseFailureMessage(translatedContent);
+            if (message !== null) {
+                failures.push(`translated output no longer parses as MDX: ${message}`);
+            }
+        }
+
         return failures;
+    }
+
+    parseFailureMessage(content) {
+        try {
+            const { content: parseableContent } = this.protectMdxHostileSpans(content);
+            this.createAstParser().parse(parseableContent);
+            return null;
+        } catch (error) {
+            return error.message;
+        }
     }
 
     // Issue #3 §5: fragment-level translation invited clauses coming back twice. A run
@@ -1464,10 +1538,23 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         });
     }
 
+    // Cosmetic pass, so a document this parser cannot read must not sink a translation
+    // that is otherwise complete - findStructuralFailures reports unparseable output
+    // separately, with the parser's own message.
     normalizeEnglishInlineCodeSpacing(content) {
+        try {
+            return this.applyEnglishInlineCodeSpacing(content);
+        } catch (error) {
+            console.warn(chalk.yellow(`[spacing] skipped inline-code spacing pass: ${error.message}`));
+            return content;
+        }
+    }
+
+    applyEnglishInlineCodeSpacing(content) {
         const parser = this.createAstParser();
         const stringifier = this.createAstStringifier();
-        const tree = parser.parse(content);
+        const { content: parseableContent, spans } = this.protectMdxHostileSpans(content);
+        const tree = parser.parse(parseableContent);
 
         const shouldAddTrailingSpace = value => /[a-z0-9]$/i.test(value) && !/\s$/.test(value);
         const shouldAddLeadingSpace = value => /^[a-z0-9]/i.test(value) && !/^\s/.test(value);
@@ -1491,7 +1578,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             }
         });
 
-        const normalized = stringifier.stringify(tree);
+        const normalized = this.restoreInlinePlaceholders(stringifier.stringify(tree), spans);
         return normalized.endsWith('\n') ? normalized : `${normalized}\n`;
     }
 
