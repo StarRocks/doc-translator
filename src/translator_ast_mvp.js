@@ -34,7 +34,14 @@ class AstMarkdownTranslator extends MarkdownTranslator {
     }
 
     buildInlineCodePlaceholder(id) {
-        return `__MTX_CODE_${id}__`;
+        return this.buildProtectedPlaceholder('CODE', id);
+    }
+
+    // Protected inline fragments share one namespace and one counter: content that must
+    // survive translation byte-exact (inline code, link destinations, raw HTML) is
+    // swapped for one of these before the text reaches the model.
+    buildProtectedPlaceholder(kind, id) {
+        return `__MTX_${kind}_${id}__`;
     }
 
     buildNeverTranslatePlaceholder(term) {
@@ -274,15 +281,109 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         }
     }
 
+    // Inline nodes that can be rendered back into a translatable run. Anything absent
+    // here still breaks the run, so images, hard breaks, and inline JSX keep their
+    // previous handling.
+    isInlineRunNode(node) {
+        return ['text', 'inlineCode', 'strong', 'emphasis', 'delete', 'link', 'html', 'mdxJsxTextElement']
+        .includes(node?.type);
+    }
+
+    hasSourceOffsets(node) {
+        return Number.isInteger(node?.position?.start?.offset) && Number.isInteger(node?.position?.end?.offset);
+    }
+
+    // A node joins a run only when its whole subtree can be rendered back to Markdown.
+    // Without this an unsupported descendant (an image inside a link, say) would be
+    // silently dropped during serialization.
+    canSerializeInlineRun(node) {
+        if (!this.isInlineRunNode(node)) {
+            return false;
+        }
+        // Inline JSX (<br />, <img />) is protected by copying its source text verbatim,
+        // which only works for a leaf element whose offsets the parser recorded. One
+        // with children would hide their text from the translation.
+        if (node.type === 'mdxJsxTextElement') {
+            return (node.children || []).length === 0 && this.hasSourceOffsets(node);
+        }
+        if (!Array.isArray(node.children)) {
+            return true;
+        }
+        return node.children.every(child => this.canSerializeInlineRun(child));
+    }
+
+    // Whether a node contributes text worth translating, at any depth - a run made only
+    // of code spans, links, and markup has nothing for the model to do.
+    runHasTranslatableText(node) {
+        if (!node) {
+            return false;
+        }
+        if (node.type === 'text') {
+            return this.shouldTranslateValue(node.value);
+        }
+        if (Array.isArray(node.children)) {
+            return node.children.some(child => this.runHasTranslatableText(child));
+        }
+        return false;
+    }
+
+    formatLinkDestination(node) {
+        const url = node.url || '';
+        return node.title ? `${url} "${node.title}"` : url;
+    }
+
+    // Renders an inline node back to Markdown so a whole sentence survives as a single
+    // translatable item. The markup itself stays visible - the model has to be able to
+    // move a bold span or a link where the target language needs it, which is exactly
+    // what it cannot do when each span arrives as its own fragment.
+    serializeInlineRunNode(node, protect, source) {
+        switch (node.type) {
+            case 'text':
+                return node.value || '';
+            case 'inlineCode':
+                return `\`${protect('CODE', node.value || '')}\``;
+            case 'html':
+                return protect('HTML', node.value || '');
+            case 'mdxJsxTextElement':
+                return protect('JSX', source.slice(node.position.start.offset, node.position.end.offset));
+            case 'strong':
+                return `**${this.serializeInlineRunChildren(node, protect, source)}**`;
+            case 'emphasis':
+                return `_${this.serializeInlineRunChildren(node, protect, source)}_`;
+            case 'delete':
+                return `~~${this.serializeInlineRunChildren(node, protect, source)}~~`;
+            case 'link':
+                return `[${this.serializeInlineRunChildren(node, protect, source)}](${protect('URL', this.formatLinkDestination(node))})`;
+            default:
+                return '';
+        }
+    }
+
+    serializeInlineRunChildren(node, protect, source) {
+        if (!Array.isArray(node.children)) {
+            return '';
+        }
+        return node.children.map(child => this.serializeInlineRunNode(child, protect, source)).join('');
+    }
+
     extractTranslatableContent(content) {
         const parser = this.createAstParser();
         const stringifier = this.createAstStringifier();
         const tree = parser.parse(content);
 
         const entries = [];
-        const inlineCodePlaceholders = [];
+        const inlinePlaceholders = [];
         let nextId = 1;
-        let nextInlineCodeId = 1;
+        let nextPlaceholderId = 1;
+
+        // Registers a fragment that must reach the output byte-exact and returns the
+        // placeholder standing in for it.
+        const protect = (kind, value) => {
+            const placeholder = this.buildProtectedPlaceholder(kind, nextPlaceholderId);
+            inlinePlaceholders.push({ placeholder, value });
+            nextPlaceholderId += 1;
+            return placeholder;
+        };
 
         const registerEntry = (currentValue, assignValue) => {
             if (!this.shouldTranslateValue(currentValue)) {
@@ -311,9 +412,8 @@ class AstMarkdownTranslator extends MarkdownTranslator {
 
             while (index < children.length) {
                 const child = children[index];
-                const isTranslatableRunNode = child?.type === 'text' || child?.type === 'inlineCode';
 
-                if (!isTranslatableRunNode) {
+                if (!this.canSerializeInlineRun(child)) {
                     rebuiltChildren.push(child);
                     index += 1;
                     continue;
@@ -324,12 +424,11 @@ class AstMarkdownTranslator extends MarkdownTranslator {
 
                 while (index < children.length) {
                     const runChild = children[index];
-                    const isRunNode = runChild?.type === 'text' || runChild?.type === 'inlineCode';
-                    if (!isRunNode) {
+                    if (!this.canSerializeInlineRun(runChild)) {
                         break;
                     }
 
-                    if (runChild.type === 'text' && this.shouldTranslateValue(runChild.value)) {
+                    if (this.runHasTranslatableText(runChild)) {
                         hasTranslatableText = true;
                     }
 
@@ -337,25 +436,16 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                     index += 1;
                 }
 
+                // Nothing for the model to do - leave the nodes alone so the recursion
+                // below can still reach anything nested inside them.
                 if (!hasTranslatableText) {
                     rebuiltChildren.push(...run);
                     continue;
                 }
 
-                let combinedText = '';
-                for (const runChild of run) {
-                    if (runChild.type === 'text') {
-                        combinedText += runChild.value || '';
-                    } else {
-                        const inlineCodePlaceholder = this.buildInlineCodePlaceholder(nextInlineCodeId);
-                        inlineCodePlaceholders.push({
-                            placeholder: inlineCodePlaceholder,
-                            value: runChild.value || ''
-                        });
-                        combinedText += `\`${inlineCodePlaceholder}\``;
-                        nextInlineCodeId += 1;
-                    }
-                }
+                const combinedText = run
+                .map(runChild => this.serializeInlineRunNode(runChild, protect, content))
+                .join('');
 
                 registerEntry(combinedText, (entryPlaceholder) => {
                     rebuiltChildren.push({ type: 'text', value: entryPlaceholder });
@@ -419,7 +509,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return {
             skeleton,
             entries,
-            inlineCodePlaceholders
+            inlinePlaceholders
         };
     }
 
@@ -1063,14 +1153,16 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         );
     }
 
-    restoreInlineCodePlaceholders(content, inlineCodePlaceholders) {
+    // Puts every protected fragment back: inline code bodies, link destinations, and
+    // raw HTML spans all share this one restore step.
+    restoreInlinePlaceholders(content, inlinePlaceholders) {
         let output = content;
 
-        for (const item of inlineCodePlaceholders) {
+        for (const item of inlinePlaceholders) {
             const escapedPlaceholder = item.placeholder.replaceAll('_', '\\_');
-            const inlineCodeValue = item.value || '';
-            output = output.split(item.placeholder).join(inlineCodeValue);
-            output = output.split(escapedPlaceholder).join(inlineCodeValue);
+            const value = item.value || '';
+            output = output.split(item.placeholder).join(value);
+            output = output.split(escapedPlaceholder).join(value);
         }
 
         return output;
@@ -1173,7 +1265,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         logChunkMetadata = false,
         trace = false
     ) {
-        const { skeleton, entries, inlineCodePlaceholders } = this.extractTranslatableContent(content);
+        const { skeleton, entries, inlinePlaceholders } = this.extractTranslatableContent(content);
         const {
             entries: protectedEntries,
             replacements: neverTranslateReplacements
@@ -1341,7 +1433,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         );
 
         let translatedContent = this.restoreTranslatedContent(skeleton, restoredNeverTranslateEntries);
-        translatedContent = this.restoreInlineCodePlaceholders(translatedContent, inlineCodePlaceholders);
+        translatedContent = this.restoreInlinePlaceholders(translatedContent, inlinePlaceholders);
         translatedContent = this.fixJsxBlockIndentation(translatedContent);
         translatedContent = this.fixAdmonitionIndentation(translatedContent);
         translatedContent = this.fixHtmlTableNewlines(translatedContent);
