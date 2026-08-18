@@ -405,7 +405,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return text
         .trim()
         .toLowerCase()
-        .replace(/[^\p{L}\p{N}\s-]/gu, '')
+        .replace(/[^\p{L}\p{N}\s_-]/gu, '')
         .replace(/\s+/g, '-')
         .replace(/-{2,}/g, '-')
         .replace(/^-|-$/g, '');
@@ -651,6 +651,16 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                     headingAnchors.set(node, slug);
                 }
             });
+        } else if (idsByLine.size > 0) {
+            // --no-heading-anchors: stripExplicitHeadingIds already removed {#id} from
+            // the source text so the MDX parser can handle it. Re-add author-supplied ids
+            // as protected placeholders so they survive translation unchanged.
+            visit(tree, 'heading', (node) => {
+                const existingId = idsByLine.get(node.position?.start?.line);
+                if (existingId) {
+                    headingAnchors.set(node, existingId);
+                }
+            });
         }
 
         processChildrenForInlineCodeContext(tree);
@@ -807,6 +817,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             '4) Do not add or remove items.\n' +
             '5) Do not include explanations or markdown code fences.\n' +
             '6) Tokens matching __MTX_CODE_<number>__ are protected placeholders for inline code. Keep them exactly unchanged. Do not translate, split, remove, or rename them.\n' +
+            '   Likewise preserve all other __MTX_<KIND>_<number>__ tokens unchanged (__MTX_URL_*__, __MTX_HTML_*__, __MTX_JSX_*__, __MTX_ANCHOR_*__). These are byte-exact source fragments that must reach the output as-is.\n' +
             '7) Tokens matching __MTX_NEVER_<hexhash>__ (where <hexhash> is an 8-character hexadecimal string like __MTX_NEVER_3fa8c201__) are protected placeholders for never-translate terms. Copy each token character-for-character into your output. Do not alter, simplify, renumber, or replace the hex hash with any other value.\n\n' +
             `Input JSON:\n${payload}`;
 
@@ -1102,6 +1113,15 @@ class AstMarkdownTranslator extends MarkdownTranslator {
     findPlaceholderLeaks(content) {
         const matches = content.match(/__MTX_\w+__|MTX_[A-Z]+_\d+_MTX/g) || [];
         return [...new Set(matches)];
+    }
+
+    // Checks that every inline placeholder injected during extraction is still present
+    // in the translated-but-not-yet-restored content. A missing placeholder means the
+    // model discarded the protected fragment (URL, raw HTML, inline JSX, heading anchor).
+    findDroppedInlinePlaceholders(content, inlinePlaceholders) {
+        return inlinePlaceholders
+            .map(({ placeholder }) => placeholder)
+            .filter(p => !content.includes(p));
     }
 
     // Structural checks that run against every real translation, not just the fixture.
@@ -1818,6 +1838,12 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         );
 
         let translatedContent = this.restoreTranslatedContent(skeleton, restoredNeverTranslateEntries);
+
+        const droppedPlaceholders = this.findDroppedInlinePlaceholders(translatedContent, inlinePlaceholders);
+        for (const p of droppedPlaceholders) {
+            console.warn(chalk.yellow(`[inline-placeholder] model dropped protected fragment: ${p}`));
+        }
+
         translatedContent = this.restoreInlinePlaceholders(translatedContent, inlinePlaceholders);
         translatedContent = this.fixJsxBlockIndentation(translatedContent);
         translatedContent = this.fixAdmonitionIndentation(translatedContent);
