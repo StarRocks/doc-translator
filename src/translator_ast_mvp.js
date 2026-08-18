@@ -1840,8 +1840,12 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         let translatedContent = this.restoreTranslatedContent(skeleton, restoredNeverTranslateEntries);
 
         const droppedPlaceholders = this.findDroppedInlinePlaceholders(translatedContent, inlinePlaceholders);
-        for (const p of droppedPlaceholders) {
-            console.warn(chalk.yellow(`[inline-placeholder] model dropped protected fragment: ${p}`));
+        if (droppedPlaceholders.length > 0) {
+            console.warn(chalk.red(
+                `[inline-placeholder] ❌ model dropped ${droppedPlaceholders.length} protected fragment` +
+                `${droppedPlaceholders.length === 1 ? '' : 's'} — ` +
+                `output is missing the source content they stood for: ${droppedPlaceholders.join(', ')}`
+            ));
         }
 
         translatedContent = this.restoreInlinePlaceholders(translatedContent, inlinePlaceholders);
