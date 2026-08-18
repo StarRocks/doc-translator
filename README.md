@@ -23,6 +23,8 @@ This code and most of the README are from the team at [PlayCanvas](https://githu
   -k, --key <apikey>      Anthropic API key (or set ANTHROPIC_API_KEY env var)
   -m, --model <model>     Claude model to use (or set ANTHROPIC_MODEL env var;
                           default: claude-sonnet-5)
+  --max-tokens <n>        Output token cap per request (or set
+                          ANTHROPIC_MAX_TOKENS; default: 16000)
   --never-translate <path>  Extra never-translate YAML list, merged over the
                           built-in one (default: .doc-translator/never_translate.yaml)
   --no-heading-anchors    Do not emit the source-language slug as an explicit
@@ -194,8 +196,9 @@ Two notes on model selection:
   for older models that accept it (Sonnet 4.6, Opus 4.6, and earlier). This is handled
   automatically per model.
 - `max_tokens` is 16000. Claude 5 models run adaptive thinking by default and thinking
-  tokens count against that cap, so it needs the headroom. If you select an older model
-  with a lower output limit, reduce `DEFAULT_MAX_TOKENS` in `src/translator.js`.
+  tokens count against that cap, so it needs the headroom. Older models cap lower —
+  Claude 3 Haiku at 4096 — and will reject every request at 16000, so lower it with
+  `--max-tokens` or `ANTHROPIC_MAX_TOKENS` when selecting one.
 
 ## Validation
 

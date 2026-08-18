@@ -11,7 +11,7 @@ import fs from 'fs-extra';
 import ora from 'ora';
 
 
-import { DEFAULT_MODEL } from '../src/translator.js';
+import { DEFAULT_MAX_TOKENS, DEFAULT_MODEL } from '../src/translator.js';
 import AstMarkdownTranslator from '../src/translator_ast_mvp.js';
 
 const program = new Command();
@@ -39,6 +39,7 @@ program
 .option('-d, --output-dir <dir>', 'Output directory (for batch translation or single file)')
 .option('-k, --key <apikey>', 'Anthropic API key (or set ANTHROPIC_API_KEY env var)')
 .option('-m, --model <model>', `Claude model to use (or set ANTHROPIC_MODEL env var; default: ${DEFAULT_MODEL})`)
+.option('--max-tokens <n>', `Output token cap per request (or set ANTHROPIC_MAX_TOKENS; default: ${DEFAULT_MAX_TOKENS}). Lower it for older models that cap below this.`)
 .option('--never-translate <path>', 'Extra never-translate YAML list, merged over the built-in one (default: .doc-translator/never_translate.yaml if present)')
 .option('--no-heading-anchors', 'Do not emit the source-language slug as an explicit heading id')
 .option('--flat', 'Use flat structure in output directory (default: preserve structure)')
@@ -74,6 +75,7 @@ program
         // Initialize translator. Precedence: --model, then ANTHROPIC_MODEL, then the default.
         const translator = new AstMarkdownTranslator(apiKey, {
             model: options.model,
+            maxTokens: options.maxTokens,
             neverTranslatePath: options.neverTranslate,
             headingAnchors: options.headingAnchors
         });

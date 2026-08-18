@@ -44,12 +44,12 @@ class MarkdownTranslator {
         this.client = new Anthropic({ apiKey, maxRetries: 5 });
         this.neverTranslateTerms = [];
         this.modelName = options.model || process.env.ANTHROPIC_MODEL || DEFAULT_MODEL;
-        this.maxTokens = DEFAULT_MAX_TOKENS;
+        this.maxTokens = this.resolveMaxTokens(options.maxTokens);
         this.sendTemperature = modelAcceptsTemperature(this.modelName);
         this.emitHeadingAnchors = options.headingAnchors !== false;
 
         const samplingNote = this.sendTemperature ? 'temperature: 0' : 'temperature: model default';
-        console.log(chalk.gray(`Using model: ${this.modelName} (${samplingNote})`));
+        console.log(chalk.gray(`Using model: ${this.modelName} (${samplingNote}, max_tokens: ${this.maxTokens})`));
 
         try {
             const configsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'configs');
@@ -93,6 +93,22 @@ class MarkdownTranslator {
         }
 
         this.loadProjectNeverTranslateTerms(options.neverTranslatePath);
+    }
+
+    // 16000 suits the current models, which spend part of the cap on thinking tokens,
+    // but older ones cap lower - Claude 3 Haiku at 4096 - and would reject every
+    // request. Overridable per run so selecting such a model stays possible.
+    resolveMaxTokens(explicitValue) {
+        const raw = explicitValue ?? process.env.ANTHROPIC_MAX_TOKENS;
+        if (raw === undefined || raw === null || raw === '') {
+            return DEFAULT_MAX_TOKENS;
+        }
+
+        const parsed = Number.parseInt(raw, 10);
+        if (!Number.isInteger(parsed) || parsed < 1) {
+            throw new Error(`Invalid max tokens: ${raw}`);
+        }
+        return parsed;
     }
 
     // The built-in never-translate list is StarRocks-scoped. A downstream project needs

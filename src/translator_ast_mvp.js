@@ -389,6 +389,17 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return '';
     }
 
+    uniqueSlug(slug, usedSlugs) {
+        if (!slug || !usedSlugs.has(slug)) {
+            return slug;
+        }
+        let suffix = 1;
+        while (usedSlugs.has(`${slug}-${suffix}`)) {
+            suffix += 1;
+        }
+        return `${slug}-${suffix}`;
+    }
+
     // Approximates github-slugger, which is what Docusaurus uses to derive heading ids.
     slugifyHeading(text) {
         return text
@@ -446,9 +457,45 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return false;
     }
 
-    formatLinkDestination(node) {
+    // Rebuilding a destination from the decoded AST fields changes link syntax: a URL
+    // containing spaces or parentheses needs angle brackets, and emitting it bare stops
+    // the restored text parsing as a link at all. Copy the destination straight out of
+    // the source when the parser recorded offsets, and fall back to a form that is at
+    // least always parseable when it did not.
+    formatLinkDestination(node, source) {
+        const raw = this.sliceLinkDestination(node, source);
+        if (raw !== null) {
+            return raw;
+        }
+
         const url = node.url || '';
-        return node.title ? `${url} "${node.title}"` : url;
+        const destination = /[\s()<>]/.test(url) ? `<${url.replace(/([<>\\])/g, '\\$1')}>` : url;
+        const title = (node.title || '').replace(/"/g, '\\"');
+        return node.title ? `${destination} "${title}"` : destination;
+    }
+
+    // A link is `[label](destination)`, and CommonMark requires `](` immediately after
+    // the label, so the destination is everything between that and the closing paren.
+    sliceLinkDestination(node, source) {
+        if (typeof source !== 'string' || !this.hasSourceOffsets(node)) {
+            return null;
+        }
+
+        const start = node.position.start.offset;
+        const end = node.position.end.offset;
+        if (source[end - 1] !== ')') {
+            return null;
+        }
+
+        const children = node.children || [];
+        const lastChild = children[children.length - 1];
+        const labelEnd = this.hasSourceOffsets(lastChild) ? lastChild.position.end.offset : start + 1;
+        const open = source.indexOf('](', labelEnd);
+        if (open === -1 || open >= end) {
+            return null;
+        }
+
+        return source.slice(open + 2, end - 1);
     }
 
     // Renders an inline node back to Markdown so a whole sentence survives as a single
@@ -472,7 +519,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             case 'delete':
                 return `~~${this.serializeInlineRunChildren(node, protect, source)}~~`;
             case 'link':
-                return `[${this.serializeInlineRunChildren(node, protect, source)}](${protect('URL', this.formatLinkDestination(node))})`;
+                return `[${this.serializeInlineRunChildren(node, protect, source)}](${protect('URL', this.formatLinkDestination(node, source))})`;
             default:
                 return '';
         }
@@ -587,6 +634,10 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         // the model never sees it.
         const headingAnchors = new Map();
         if (this.emitHeadingAnchors) {
+            // github-slugger suffixes a repeat as foo, foo-1, foo-2. Without that, two
+            // headings with the same wording get the same id, the page carries duplicate
+            // ids, and the second inbound anchor still breaks.
+            const usedSlugs = new Set();
             visit(tree, 'heading', (node) => {
                 const headingText = this.getInlineText(node);
                 if (!headingText.trim()) {
@@ -594,8 +645,9 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                 }
                 // An id the author already set wins over a derived one.
                 const existingId = idsByLine.get(node.position?.start?.line);
-                const slug = existingId || this.slugifyHeading(headingText);
+                const slug = existingId || this.uniqueSlug(this.slugifyHeading(headingText), usedSlugs);
                 if (slug) {
+                    usedSlugs.add(slug);
                     headingAnchors.set(node, slug);
                 }
             });

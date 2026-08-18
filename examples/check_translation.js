@@ -345,20 +345,42 @@ function checkTableColumnCounts(src, trn) {
     // A non-blank line directly under a table row is a dropped leading pipe - the row
     // was emitted as two lines. Neither the row counts nor the column counts can see
     // that on their own, because the orphan half is not a table line at all.
+    // Scans the original lines, tracking fence state directly: counting over
+    // linesOutsideCode would number the survivors, so every reported line after a
+    // fenced block would point at the wrong place in the file.
     function orphanedRowLines(content) {
         const orphans = [];
         let inTable = false;
-        let lineNumber = 0;
-        for (const line of linesOutsideCode(content)) {
-            lineNumber += 1;
+        let inCode = false;
+        let fenceChar = '';
+        let fenceLen = 0;
+
+        content.split('\n').forEach((line, index) => {
             const trimmed = line.trim();
-            if (trimmed === '') { inTable = false; continue; }
-            if (trimmed.startsWith('|')) { inTable = true; continue; }
+            const fenceMatch = trimmed.match(/^([`~]{3,})/);
+            if (fenceMatch) {
+                if (!inCode) {
+                    inCode = true;
+                    fenceChar = fenceMatch[1][0];
+                    fenceLen = fenceMatch[1].length;
+                } else if (fenceMatch[1][0] === fenceChar && fenceMatch[1].length >= fenceLen) {
+                    inCode = false;
+                    fenceChar = '';
+                    fenceLen = 0;
+                }
+                inTable = false;
+                return;
+            }
+            if (inCode) return;
+
+            if (trimmed === '') { inTable = false; return; }
+            if (trimmed.startsWith('|')) { inTable = true; return; }
             if (inTable) {
-                orphans.push(`Line ${lineNumber}: "${trimmed.slice(0, 60)}" is missing its leading |`);
+                orphans.push(`Line ${index + 1}: "${trimmed.slice(0, 60)}" is missing its leading |`);
                 inTable = false;
             }
-        }
+        });
+
         return orphans;
     }
 
