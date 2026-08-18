@@ -202,8 +202,11 @@ function checkLinkUrls(src, trn) {
 
 // <br/> and <br /> render identically, so comparing them byte-exact reports a
 // difference that does not matter and trains readers to ignore the output.
+// Only the whitespace immediately before `/>` is cosmetic: <br/> and <br /> render
+// identically. Collapsing whitespace everywhere also normalized it inside quoted
+// attribute values, hiding a real change such as title="a  b" becoming title="a b".
 function normalizeHtmlTag(tag) {
-    return tag.replace(/\s+/g, ' ').replace(/\s*\/>$/, '/>').replace(/<\s+/, '<');
+    return tag.replace(/\s+\/>$/, '/>');
 }
 
 function checkHtmlInTableCells(src, trn) {
@@ -335,9 +338,12 @@ function checkTableColumnCounts(src, trn) {
             if (!trimmed.startsWith('|')) continue;
             if (/^\|[\s|:-]+\|$/.test(trimmed)) continue; // separator row
             // A row missing its trailing pipe still has to be counted, or the damage
-            // is invisible: the previous version skipped the line entirely.
-            const body = trimmed.endsWith('|') ? trimmed.slice(1, -1) : trimmed.slice(1);
-            counts.push(body.split('|').length);
+            // is invisible: the previous version skipped the line entirely. Counting
+            // cells alone is not enough either - "| a | b" and "| a | b |" both yield
+            // two - so the pipe state travels with the count.
+            const endsWithPipe = trimmed.endsWith('|');
+            const body = endsWithPipe ? trimmed.slice(1, -1) : trimmed.slice(1);
+            counts.push({ cells: body.split('|').length, endsWithPipe });
         }
         return counts;
     }
@@ -384,6 +390,8 @@ function checkTableColumnCounts(src, trn) {
         return orphans;
     }
 
+    // Split rows are one kind, so an aggregate compare is enough here - but it still
+    // must not let a source orphan excuse a translated one at a different table.
     const srcOrphans = orphanedRowLines(src).length;
     const trnOrphans = orphanedRowLines(trn);
     if (trnOrphans.length > srcOrphans) {
@@ -398,7 +406,15 @@ function checkTableColumnCounts(src, trn) {
     }
 
     const mismatches = sc
-        .map((n, i) => (n !== tc[i] ? `Row ${i + 1}: ${n} → ${tc[i]} columns` : null))
+        .map((row, i) => {
+            if (row.cells !== tc[i].cells) {
+                return `Row ${i + 1}: ${row.cells} → ${tc[i].cells} columns`;
+            }
+            if (row.endsWithPipe && !tc[i].endsWithPipe) {
+                return `Row ${i + 1}: lost its trailing |`;
+            }
+            return null;
+        })
         .filter(Boolean);
 
     if (mismatches.length === 0) return result('Table column counts', true, `${sc.length} row(s) OK`);
