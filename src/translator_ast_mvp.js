@@ -950,7 +950,11 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                     // processedLine === line here (addedIndent was null so no stripping happened above)
                     const rawIndent = line.length - line.trimStart().length;
                     const detected = rawIndent > top.openerIndent ? rawIndent - top.openerIndent : 0;
-                    const startsStructuredMarkdown = /^(?:[-*+]\s|\d+[.)]\s|>\s|:::[\w-]+|[`~]{3,}|<\/?[A-Z][^>]*>|<\/?[a-z][^>]*>)/.test(processedTrimmed);
+                    // A nested JSX opener (<TabItem> inside <Tabs>, etc.) is the normal
+                    // shape of these blocks, not intentional nesting, so it must not
+                    // suppress stripping - otherwise a uniformly indented block keeps the
+                    // model's cosmetic indent on every child, admonitions included.
+                    const startsStructuredMarkdown = /^(?:[-*+]\s|\d+[.)]\s|>\s|:::[\w-]+|[`~]{3,})/.test(processedTrimmed);
                     // Four leading spaces in markdown commonly indicate intentional
                     // nested structure (e.g. indented code/list content), so keep it.
                     const normalized = (startsStructuredMarkdown || detected >= 4) ? 0 : detected;
