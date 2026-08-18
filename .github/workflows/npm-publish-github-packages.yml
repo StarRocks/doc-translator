@@ -18,7 +18,7 @@ jobs:
       - run: npm ci
       - run: npm test
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
   publish-gpr:
     needs: build
