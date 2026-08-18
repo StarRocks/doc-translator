@@ -901,115 +901,123 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return result.join('\n');
     }
 
+    // Removes the cosmetic indentation models add to the children of a JSX block
+    // (<Tabs>, <TabItem>, <details>). An indent shared by every line of a block is a
+    // uniform prefix rather than structure, so removing it preserves relative nesting:
+    // a list or fenced block indented further inside the block keeps its extra indent.
+    // Blocks are dedented as they close, so an inner block is normalized before the
+    // block containing it.
     fixJsxBlockIndentation(content) {
         const lines = content.split('\n');
+        const stack = [];
+        let inCodeBlock = false;
+        let codeFenceChar = '';
+        let codeFenceLen = 0;
+
+        for (let i = 0; i < lines.length; i++) {
+            const trimmed = lines[i].trimStart();
+
+            const fenceMatch = trimmed.match(/^([`~]{3,})/);
+            if (fenceMatch) {
+                if (!inCodeBlock) {
+                    inCodeBlock = true;
+                    codeFenceChar = fenceMatch[1][0];
+                    codeFenceLen = fenceMatch[1].length;
+                } else if (fenceMatch[1][0] === codeFenceChar && fenceMatch[1].length >= codeFenceLen) {
+                    inCodeBlock = false;
+                    codeFenceChar = '';
+                    codeFenceLen = 0;
+                }
+                continue;
+            }
+            if (inCodeBlock) {
+                continue;
+            }
+
+            const top = stack.length > 0 ? stack[stack.length - 1] : null;
+            if (top && new RegExp(`^<\\/${top.tag}\\b`).test(trimmed)) {
+                stack.pop();
+                this.dedentJsxBlockBody(lines, top.startIndex, i, top.openerIndent);
+                // The model sometimes indents the closer to match preceding list content,
+                // which makes MDX read it as list continuation rather than a JSX closer.
+                lines[i] = `${' '.repeat(top.openerIndent)}${trimmed}`;
+                continue;
+            }
+
+            const openerMatch = lines[i].match(/^(\s*)<(Tabs|TabItem|details)[\s>]/);
+            if (openerMatch && !lines[i].trimEnd().endsWith('/>')) {
+                stack.push({
+                    tag: openerMatch[2],
+                    openerIndent: openerMatch[1].length,
+                    startIndex: i
+                });
+            }
+        }
+
+        return this.separateJsxClosers(lines).join('\n');
+    }
+
+    // Strips the indentation shared by every non-empty line between a JSX opener and its
+    // closer, down to the opener's own indentation.
+    dedentJsxBlockBody(lines, startIndex, endIndex, openerIndent) {
+        let sharedIndent = null;
+        for (let i = startIndex + 1; i < endIndex; i++) {
+            const trimmed = lines[i].trimStart();
+            if (trimmed.length === 0) {
+                continue;
+            }
+            const indent = lines[i].length - trimmed.length;
+            sharedIndent = sharedIndent === null ? indent : Math.min(sharedIndent, indent);
+        }
+
+        const extra = sharedIndent === null ? 0 : sharedIndent - openerIndent;
+        if (extra <= 0) {
+            return;
+        }
+
+        for (let i = startIndex + 1; i < endIndex; i++) {
+            if (lines[i].trimStart().length > 0) {
+                lines[i] = lines[i].slice(extra);
+            }
+        }
+    }
+
+    // Ensures a blank line precedes every JSX closer so it is not swallowed by a
+    // preceding list, paragraph, or admonition block.
+    separateJsxClosers(lines) {
         const result = [];
-        const blockStack = []; // { tag, openerIndent, addedIndent }
         let inCodeBlock = false;
         let codeFenceChar = '';
         let codeFenceLen = 0;
 
         for (const line of lines) {
-            const top = blockStack.length > 0 ? blockStack[blockStack.length - 1] : null;
+            const trimmed = line.trimStart();
 
-            // Strip the current top block's addedIndent from this line (if already known)
-            let processedLine = line;
-            if (top && top.addedIndent !== null && top.addedIndent > 0) {
-                const trimmed = line.trimStart();
-                if (trimmed.length > 0) {
-                    const indent = line.length - trimmed.length;
-                    if (indent >= top.addedIndent) {
-                        processedLine = line.slice(top.addedIndent);
-                    }
-                }
-            }
-
-            if (!inCodeBlock) {
-                const processedTrimmed = processedLine.trimStart();
-
-                // Check for closing tag of the top block
-                if (top && new RegExp(`^<\\/${top.tag}\\b`).test(processedTrimmed)) {
-                    blockStack.pop();
-                    // Always emit the closer at the opener's indentation level (the model
-                    // sometimes indents </TabItem> to match preceding list content, which
-                    // makes MDX parse it as list continuation rather than a JSX closer).
-                    const normalizedCloser = `${' '.repeat(top.openerIndent)}${processedLine.trimStart()}`;
-                    // Ensure a blank line precedes the closer so it isn't swallowed by a
-                    // preceding list, paragraph, or admonition block.
-                    if (result.length > 0 && result[result.length - 1].trim() !== '') {
-                        result.push('');
-                    }
-                    result.push(normalizedCloser);
-                    continue;
-                }
-
-                // Detect addedIndent from the first non-empty line inside the block.
-                // If the first line looks like intentionally structured markdown
-                // (e.g. nested list, blockquote, fenced code, nested JSX), preserve it.
-                if (top && top.addedIndent === null && processedTrimmed.length > 0) {
-                    // processedLine === line here (addedIndent was null so no stripping happened above)
-                    const rawIndent = line.length - line.trimStart().length;
-                    const detected = rawIndent > top.openerIndent ? rawIndent - top.openerIndent : 0;
-                    // A nested JSX opener (<TabItem> inside <Tabs>, etc.) is the normal
-                    // shape of these blocks, not intentional nesting, so it must not
-                    // suppress stripping - otherwise a uniformly indented block keeps the
-                    // model's cosmetic indent on every child, admonitions included.
-                    const startsStructuredMarkdown = /^(?:[-*+]\s|\d+[.)]\s|>\s|:::[\w-]+|[`~]{3,})/.test(processedTrimmed);
-                    // Four leading spaces in markdown commonly indicate intentional
-                    // nested structure (e.g. indented code/list content), so keep it.
-                    const normalized = (startsStructuredMarkdown || detected >= 4) ? 0 : detected;
-                    top.addedIndent = normalized;
-                    if (normalized > 0 && rawIndent >= normalized) {
-                        processedLine = line.slice(normalized);
-                    }
-                }
-
-                // Check for a new JSX block opener (Tabs, TabItem, or details)
-                const openerMatch = processedLine.match(/^(\s*)<(Tabs|TabItem|details)[\s>]/);
-                if (openerMatch && !processedLine.trimEnd().endsWith('/>')) {
-                    const innerTrimmed = processedLine.trimStart();
-                    blockStack.push({
-                        tag: openerMatch[2],
-                        openerIndent: processedLine.length - innerTrimmed.length,
-                        addedIndent: null
-                    });
-                    result.push(processedLine);
-                    continue;
-                }
-
-                // Track code fence openings
-                const fenceM = processedLine.match(/^(\s*)([`~]{3,})/);
-                if (fenceM) {
+            const fenceMatch = trimmed.match(/^([`~]{3,})/);
+            if (fenceMatch) {
+                if (!inCodeBlock) {
                     inCodeBlock = true;
-                    codeFenceChar = fenceM[2][0];
-                    codeFenceLen = fenceM[2].length;
-                    result.push(processedLine);
-                    continue;
+                    codeFenceChar = fenceMatch[1][0];
+                    codeFenceLen = fenceMatch[1].length;
+                } else if (fenceMatch[1][0] === codeFenceChar && fenceMatch[1].length >= codeFenceLen) {
+                    inCodeBlock = false;
+                    codeFenceChar = '';
+                    codeFenceLen = 0;
                 }
-
-                // Empty lines: output the original line (nothing to strip)
-                if (!processedTrimmed) {
-                    result.push(line);
-                } else {
-                    result.push(processedLine);
-                }
-            } else {
-                // Inside a code block: track fence closing, still apply parent stripping
-                const fenceM = processedLine.match(/^(\s*)([`~]{3,})/);
-                if (fenceM) {
-                    const ch = fenceM[2][0];
-                    const len = fenceM[2].length;
-                    if (ch === codeFenceChar && len >= codeFenceLen) {
-                        inCodeBlock = false;
-                        codeFenceChar = '';
-                        codeFenceLen = 0;
-                    }
-                }
-                result.push(processedLine);
+                result.push(line);
+                continue;
             }
+
+            if (!inCodeBlock &&
+                /^<\/(?:Tabs|TabItem|details)\b/.test(trimmed) &&
+                result.length > 0 &&
+                result[result.length - 1].trim() !== '') {
+                result.push('');
+            }
+            result.push(line);
         }
 
-        return result.join('\n');
+        return result;
     }
 
     fixHtmlTableNewlines(content) {
