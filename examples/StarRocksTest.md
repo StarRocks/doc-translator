@@ -106,6 +106,7 @@ def calculate_total(items):
 | Formatting | Preserve markdown structure | ✅ Active |
 | Code Blocks | Keep code untranslated | ✅ Active |
 | Links | Maintain URL integrity | ✅ Active |
+| Escaped pipes | A cell whose code span contains `{state: ok\|failed\|skipped}` | ✅ Active |
 
 ## Links and Images
 
