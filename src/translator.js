@@ -48,8 +48,14 @@ class MarkdownTranslator {
         this.sendTemperature = modelAcceptsTemperature(this.modelName);
         this.emitHeadingAnchors = options.headingAnchors !== false;
 
+        // Tooling that only needs the validation helpers (examples/check_translation.js)
+        // has no use for the startup banner.
+        this.quiet = Boolean(options.quiet);
+
         const samplingNote = this.sendTemperature ? 'temperature: 0' : 'temperature: model default';
-        console.log(chalk.gray(`Using model: ${this.modelName} (${samplingNote}, max_tokens: ${this.maxTokens})`));
+        if (!this.quiet) {
+            console.log(chalk.gray(`Using model: ${this.modelName} (${samplingNote}, max_tokens: ${this.maxTokens})`));
+        }
 
         try {
             const configsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'configs');
@@ -88,7 +94,7 @@ class MarkdownTranslator {
             this.languageDictionaries = this.languageDictionaries || {};
         }
 
-        if (!this.systemPromptTemplate) {
+        if (!this.systemPromptTemplate && !this.quiet) {
             console.warn(chalk.yellow('⚠️  No system prompt loaded — translation quality will be degraded.'));
         }
 
@@ -131,7 +137,9 @@ class MarkdownTranslator {
 
             const terms = this.parseYamlList(fs.readFileSync(candidate, 'utf8'));
             this.neverTranslateTerms = [...new Set([...this.neverTranslateTerms, ...terms])];
-            console.log(chalk.gray(`Merged ${terms.length} never-translate term(s) from ${candidate}`));
+            if (!this.quiet) {
+                console.log(chalk.gray(`Merged ${terms.length} never-translate term(s) from ${candidate}`));
+            }
             return;
         }
     }

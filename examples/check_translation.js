@@ -9,6 +9,7 @@
  */
 
 import fs from 'fs-extra';
+import AstMarkdownTranslator from '../src/translator_ast_mvp.js';
 import path from 'path';
 
 // Terms that must appear in the translated file whenever they appear in source.
@@ -330,6 +331,20 @@ function checkListItemCount(src, trn) {
     return result('Unordered list items', false, `Expected ${s}, got ${t}`);
 }
 
+// Reuses the translator's own rule rather than restating it here: two copies of a slug
+// algorithm drift, and a check that disagrees with the thing it validates is worse than
+// no check. Every source heading's slug must appear as an explicit id in the output, or
+// inbound #anchor links break silently while the heading counts still match.
+function checkHeadingAnchors(src, trn) {
+    const translator = new AstMarkdownTranslator('unused', { quiet: true });
+    const expected = translator.collectExpectedHeadingSlugs(src).length;
+    if (expected === 0) return result('Heading anchors', true, 'No headings');
+
+    const failures = translator.findHeadingAnchorFailures(src, trn);
+    if (failures.length === 0) return result('Heading anchors', true, `${expected} anchor(s) preserved`);
+    return result('Heading anchors', false, failures[0]);
+}
+
 function checkTableColumnCounts(src, trn) {
     function colCounts(content) {
         const counts = [];
@@ -458,6 +473,7 @@ async function main() {
         checkNeverTranslateTerms,
         checkListItemCount,
         checkTableColumnCounts,
+        checkHeadingAnchors,
     ];
 
     const results = checks.map(fn => fn(src, trn));

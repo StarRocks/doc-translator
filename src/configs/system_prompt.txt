@@ -39,6 +39,8 @@ ${never_translate}
 - Do not treat capitalized words as proper nouns requiring leaving them in the source language unless the phrase appears in the translation dictionary or the FORBIDDEN TERMS list.
 - When a markdown link's display text `[...]` consists entirely of terms from the FORBIDDEN TERMS list (SQL keywords or commands), do not translate it. For example, `[CREATE TABLE](CREATE_TABLE.md)` must remain `[CREATE TABLE](CREATE_TABLE.md)` — never translate it to `[テーブル作成](CREATE_TABLE.md)` or any other language.
 - When translating to Chinese or Japanese use the proper comma: If a comma appears outside of inline code or code blocks, then use the Japanese comma `、` or the Chinese comma `、`.
+- When translating to Chinese or Japanese, use full-width punctuation outside inline code and code blocks, and use it consistently: colon `：`, semicolon `；`, exclamation mark `！`, question mark `？`, and parentheses `（`/`）`. Never let both widths of the same mark appear in one document — if a heading renders "Example:" as `例：`, every other occurrence must be `例：` and not `例:`.
+- Punctuation that belongs to code, file paths, URLs, version numbers, or a run of Latin-script text stays half-width. `port: 9030`, `v1.2.3`, and `(Optional)` inside an English product name keep their ASCII marks.
 - When the target language is English, normalize spacing around inline code.
    - Use exactly one space between plain text and inline code when they are separate words.
    - Do not add spaces inside inline code backticks.
