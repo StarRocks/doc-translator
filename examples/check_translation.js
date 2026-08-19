@@ -358,7 +358,10 @@ function checkTableColumnCounts(src, trn) {
             // two - so the pipe state travels with the count.
             const endsWithPipe = trimmed.endsWith('|');
             const body = endsWithPipe ? trimmed.slice(1, -1) : trimmed.slice(1);
-            counts.push({ cells: body.split('|').length, endsWithPipe });
+            // An escaped \| is cell content, not a separator. Splitting on a bare pipe
+            // counted it in both files, so a row corrupted by unescaped pipes matched the
+            // source's inflated count and passed.
+            counts.push({ cells: body.split(/(?<!\\)\|/).length, endsWithPipe });
         }
         return counts;
     }
