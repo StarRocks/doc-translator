@@ -1126,6 +1126,68 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             !content.includes(placeholder.replaceAll('_', '\\_')));
     }
 
+    // The slugs the source headings would have produced - the ids the output must carry
+    // for inbound #anchor links to keep working after the headings are translated.
+    collectExpectedHeadingSlugs(content) {
+        const { content: headingless, idsByLine } = this.stripExplicitHeadingIds(content);
+        const { content: parseable } = this.protectMdxHostileSpans(headingless);
+        const tree = this.createAstParser().parse(parseable);
+        const slugger = this.createSlugger();
+        const slugs = [];
+
+        visit(tree, 'heading', (node) => {
+            const headingText = this.getInlineText(node);
+            if (!headingText.trim()) {
+                return;
+            }
+            const existingId = idsByLine.get(node.position?.start?.line);
+            if (existingId) {
+                slugger.slug(existingId);
+                slugs.push(existingId);
+            } else {
+                slugs.push(slugger.slug(headingText));
+            }
+        });
+
+        return slugs;
+    }
+
+    collectHeadingIds(content) {
+        const ids = [];
+        this.mapLinesOutsideCode(content, (line) => {
+            // Headings nested inside a JSX block carry that block's indentation, and the
+            // expectation side reads them from the AST, so anchoring at column 0 here
+            // reported a correctly emitted anchor as missing.
+            const match = line.match(/^[ \t]*#{1,6}[^\n]*?\{#([^}\s]+)\}[ \t]*$/);
+            if (match) {
+                ids.push(match[1]);
+            }
+            return line;
+        });
+        return ids;
+    }
+
+    // Verifying the anchors end to end, the way the first clean CI run was checked by
+    // hand: every source heading's slug must appear as an explicit id in the output. A
+    // dropped or altered one breaks exactly the inbound links the feature exists to
+    // keep alive, and nothing else notices - heading counts still match.
+    findHeadingAnchorFailures(sourceContent, translatedContent) {
+        if (!this.emitHeadingAnchors) {
+            return [];
+        }
+
+        const expected = this.collectExpectedHeadingSlugs(sourceContent);
+        const actual = new Set(this.collectHeadingIds(translatedContent));
+        const missing = expected.filter(slug => !actual.has(slug));
+
+        if (missing.length === 0) {
+            return [];
+        }
+        const shown = missing.slice(0, 5).map(slug => `{#${slug}}`).join(', ');
+        return [`translated headings are missing ${missing.length} source anchor(s): ${shown}` +
+            `${missing.length > 5 ? ', …' : ''}`];
+    }
+
     // Structural checks that run against every real translation, not just the fixture.
     // A table problem the source already has is not a translation defect, so only
     // problems the translation introduced are reported.
@@ -1155,6 +1217,8 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         for (const placeholder of this.findPlaceholderLeaks(translatedContent)) {
             failures.push(`unrestored placeholder ${placeholder}`);
         }
+
+        failures.push(...this.findHeadingAnchorFailures(sourceContent, translatedContent));
 
         // Output the parser cannot read will not build either. Only report it when the
         // source itself parsed, so an input this tool never supported is not blamed on
@@ -1217,7 +1281,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
     // Issue #3 §5: one page rendered the same UI label three different ways. Identical
     // short source strings should map to identical translations within a file; long
     // prose legitimately varies with context, so only short strings are compared.
-    findGlossaryInconsistencies(sourceEntries, translatedEntries, maxSourceLength = 60) {
+    groupTranslationsBySource(sourceEntries, translatedEntries, maxSourceLength) {
         const translationById = new Map(translatedEntries.map(entry => [entry.id, entry.text]));
         const variantsBySource = new Map();
 
@@ -1236,12 +1300,60 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             variantsBySource.get(source).add(translation.trim());
         }
 
+        return variantsBySource;
+    }
+
+    // Maps every full-width mark to its ASCII counterpart, so two renderings that differ
+    // only in punctuation width collapse to the same string.
+    normalizePunctuationWidth(text) {
+        const fullWidth = '：；！？（）［］，。、';
+        const halfWidth = ':;!?()[],..';
+        return [...text].map((character) => {
+            const index = fullWidth.indexOf(character);
+            return index === -1 ? character : halfWidth[index];
+        }).join('');
+    }
+
+    // Issue #3 §5: one page rendered the same UI label three different ways. Identical
+    // short source strings should map to identical translations within a file; long
+    // prose legitimately varies with context, so only short strings are compared.
+    // Renderings differing only in punctuation width are reported separately by
+    // findPunctuationWidthInconsistencies - that is an unambiguous defect, where a
+    // wording difference is often just a heading reading as a noun and a step as a verb.
+    findGlossaryInconsistencies(sourceEntries, translatedEntries, maxSourceLength = 60) {
         const warnings = [];
-        for (const [source, variants] of variantsBySource) {
-            if (variants.size > 1) {
-                const rendered = [...variants].map(variant => `"${variant}"`).join(', ');
-                warnings.push(`"${source}" was translated ${variants.size} different ways: ${rendered}`);
+
+        for (const [source, variants] of this.groupTranslationsBySource(sourceEntries, translatedEntries, maxSourceLength)) {
+            if (variants.size <= 1) {
+                continue;
             }
+            const normalized = new Set([...variants].map(v => this.normalizePunctuationWidth(v)));
+            if (normalized.size <= 1) {
+                continue;
+            }
+            const rendered = [...variants].map(variant => `"${variant}"`).join(', ');
+            warnings.push(`"${source}" was translated ${variants.size} different ways: ${rendered}`);
+        }
+
+        return warnings;
+    }
+
+    // Mixed half-width and full-width forms of the same mark inside one document, which
+    // the CJK punctuation rule in the system prompt forbids. Unlike a wording
+    // difference this is never legitimate, so it is worth calling out on its own.
+    findPunctuationWidthInconsistencies(sourceEntries, translatedEntries, maxSourceLength = 60) {
+        const warnings = [];
+
+        for (const [source, variants] of this.groupTranslationsBySource(sourceEntries, translatedEntries, maxSourceLength)) {
+            if (variants.size <= 1) {
+                continue;
+            }
+            const normalized = new Set([...variants].map(v => this.normalizePunctuationWidth(v)));
+            if (normalized.size > 1) {
+                continue;
+            }
+            const rendered = [...variants].map(variant => `"${variant}"`).join(' vs ');
+            warnings.push(`"${source}" mixes punctuation widths: ${rendered}`);
         }
 
         return warnings;
@@ -1802,6 +1914,10 @@ class AstMarkdownTranslator extends MarkdownTranslator {
 
         for (const warning of this.findGlossaryInconsistencies(entries, translatedEntries)) {
             console.warn(chalk.yellow(`[glossary] ${warning}`));
+        }
+
+        for (const warning of this.findPunctuationWidthInconsistencies(entries, translatedEntries)) {
+            console.warn(chalk.yellow(`[punctuation] ${warning}`));
         }
 
         const neverTranslateWarnings = this.validateNeverTranslatePlaceholders(

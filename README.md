@@ -210,6 +210,8 @@ Every translation is validated, not just the `examples/` fixture.
   columns — the failure that shipped a broken Japanese table past both checkers
 - a table row split across two lines, which is what a dropped leading pipe looks like
 - an unrestored `__MTX_…__` placeholder, meaning protected content was lost
+- a source heading whose slug is missing from the output's explicit ids — heading counts
+  still match when an anchor is dropped, so nothing else would notice
 
 A problem the source file already has is not counted against the translation.
 
@@ -217,6 +219,9 @@ A problem the source file already has is not counted against the translation.
 
 - `[duplicate]` — a translated item repeating a run of 20+ characters
 - `[glossary]` — one short source string translated more than one way in the same file
+- `[punctuation]` — renderings that differ only in punctuation width (`例：` vs `例:`).
+  Reported separately from `[glossary]` because it is never legitimate, whereas a wording
+  difference is often just a heading reading as a noun and a step as a verb.
 
 ## Heading anchors
 
