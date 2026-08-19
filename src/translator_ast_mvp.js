@@ -4,6 +4,7 @@ import chalk from 'chalk';
 import fs from 'fs-extra';
 import Slugger from 'github-slugger';
 import remarkFrontmatter from 'remark-frontmatter';
+import remarkGfm from 'remark-gfm';
 import remarkMdx from 'remark-mdx';
 import remarkParse from 'remark-parse';
 import remarkStringify from 'remark-stringify';
@@ -19,14 +20,19 @@ class AstMarkdownTranslator extends MarkdownTranslator {
 
     static AST_SPLIT_RETRY_MAX_DEPTH = 6;
 
+    // remark-gfm makes a pipe table an actual table node, so each cell becomes its own
+    // translatable item and the stringifier rebuilds the table structure. Without it the
+    // whole table arrived as one item and the model had to reproduce every pipe by hand,
+    // which is how a row shipped split across two lines.
     createAstParser() {
-        return unified().use(remarkParse).use(remarkFrontmatter, ['yaml']).use(remarkMdx);
+        return unified().use(remarkParse).use(remarkFrontmatter, ['yaml']).use(remarkGfm).use(remarkMdx);
     }
 
     createAstStringifier() {
         return unified()
         .use(remarkFrontmatter, ['yaml'])
         .use(remarkStringify, { fences: true, bullet: '-', listItemIndent: 'one' })
+        .use(remarkGfm)
         .use(remarkMdx);
     }
 
@@ -463,6 +469,13 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return node.title ? `${destination} "${title}"` : destination;
     }
 
+    sliceInlineSource(node, source) {
+        if (typeof source !== 'string' || !this.hasSourceOffsets(node)) {
+            return null;
+        }
+        return source.slice(node.position.start.offset, node.position.end.offset);
+    }
+
     // A link is `[label](destination)`, and CommonMark requires `](` immediately after
     // the label, so the destination is everything between that and the closing paren.
     sliceLinkDestination(node, source) {
@@ -507,8 +520,16 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                 return `_${this.serializeInlineRunChildren(node, protect, source)}_`;
             case 'delete':
                 return `~~${this.serializeInlineRunChildren(node, protect, source)}~~`;
-            case 'link':
+            case 'link': {
+                // GFM turns a bare URL in prose into a link node. Rendering that back as
+                // [url](url) rewrites the author's text, so a literal is copied verbatim
+                // instead - it has no display text to translate anyway.
+                const raw = this.sliceInlineSource(node, source);
+                if (raw !== null && !raw.startsWith('[')) {
+                    return protect('URL', raw);
+                }
                 return `[${this.serializeInlineRunChildren(node, protect, source)}](${protect('URL', this.formatLinkDestination(node, source))})`;
+            }
             default:
                 return '';
         }
@@ -1092,16 +1113,13 @@ class AstMarkdownTranslator extends MarkdownTranslator {
     }
 
     restoreTranslatedContent(skeleton, translatedEntries) {
-        let output = skeleton;
-
-        for (const entry of translatedEntries) {
-            const placeholder = this.buildPlaceholder(entry.id);
-            const escapedPlaceholder = placeholder.replaceAll('_', '\\_');
-            output = output.split(placeholder).join(entry.text);
-            output = output.split(escapedPlaceholder).join(entry.text);
-        }
-
-        return output;
+        return this.restorePlaceholdersLineAware(
+            skeleton,
+            translatedEntries.map(entry => ({
+                placeholder: this.buildPlaceholder(entry.id),
+                value: entry.text
+            }))
+        );
     }
 
     // Any placeholder still present in the output means a protected fragment was never
@@ -1675,21 +1693,71 @@ class AstMarkdownTranslator extends MarkdownTranslator {
 
     // Puts every protected fragment back: inline code bodies, link destinations, and
     // raw HTML spans all share this one restore step.
+    // A pipe inside restored content splits the cell it lands in, because whatever hid
+    // it - a placeholder, or an entry extracted before stringify - kept it away from the
+    // stringifier: the table was written cleanly and the pipe arrives afterwards. GFM
+    // unescapes \\| inside a table cell, including within a code span, so escaping here
+    // reproduces the original character while keeping the row intact.
+    escapeTablePipes(value) {
+        return value.replace(/(?<!\\)\|/g, '\\|');
+    }
+
+    // Restores placeholder→value pairs a line at a time, so a value landing in a table
+    // row can have its pipes escaped while the same value elsewhere stays untouched.
+    restorePlaceholdersLineAware(content, items) {
+        if (items.length === 0) {
+            return content;
+        }
+
+        const prepared = items.map(item => ({
+            placeholder: item.placeholder,
+            escapedPlaceholder: item.placeholder.replaceAll('_', '\\_'),
+            value: item.value || ''
+        }));
+
+        let inCodeBlock = false;
+        let codeFenceChar = '';
+        let codeFenceLen = 0;
+
+        return content.split('\n').map((line) => {
+            const fenceMatch = line.trim().match(/^([`~]{3,})/);
+            if (fenceMatch) {
+                if (!inCodeBlock) {
+                    inCodeBlock = true;
+                    codeFenceChar = fenceMatch[1][0];
+                    codeFenceLen = fenceMatch[1].length;
+                } else if (fenceMatch[1][0] === codeFenceChar && fenceMatch[1].length >= codeFenceLen) {
+                    inCodeBlock = false;
+                    codeFenceChar = '';
+                    codeFenceLen = 0;
+                }
+                return line;
+            }
+
+            if (!line.includes('MTX')) {
+                return line;
+            }
+
+            const isTableRow = !inCodeBlock && line.trim().startsWith('|');
+            let output = line;
+            for (const item of prepared) {
+                if (!output.includes(item.placeholder) && !output.includes(item.escapedPlaceholder)) {
+                    continue;
+                }
+                const value = isTableRow ? this.escapeTablePipes(item.value) : item.value;
+                output = output.split(item.placeholder).join(value);
+                output = output.split(item.escapedPlaceholder).join(value);
+            }
+            return output;
+        }).join('\n');
+    }
+
     // Reverse creation order, because a placeholder made earlier can be nested inside
     // one made later: inline code containing an autolink becomes MTX_RAW_1_MTX first,
     // and that value is then stored behind __MTX_CODE_2__. Restoring in creation order
     // looks for RAW while it is still hidden inside CODE, and leaves the token behind.
     restoreInlinePlaceholders(content, inlinePlaceholders) {
-        let output = content;
-
-        for (const item of [...inlinePlaceholders].reverse()) {
-            const escapedPlaceholder = item.placeholder.replaceAll('_', '\\_');
-            const value = item.value || '';
-            output = output.split(item.placeholder).join(value);
-            output = output.split(escapedPlaceholder).join(value);
-        }
-
-        return output;
+        return this.restorePlaceholdersLineAware(content, [...inlinePlaceholders].reverse());
     }
 
     isEnglishTarget(targetLanguage) {

@@ -200,6 +200,18 @@ Two notes on model selection:
   Claude 3 Haiku at 4096 — and will reject every request at 16000, so lower it with
   `--max-tokens` or `ANTHROPIC_MAX_TOKENS` when selecting one.
 
+## Tables
+
+Pipe tables are parsed as tables, so **each cell is its own translatable item** and the
+table structure is rebuilt by the stringifier rather than reproduced by the model. That
+removes the failure where a row came back split across two lines.
+
+One consequence worth knowing: a `|` inside a cell has to be escaped as `\|`, and content
+that is hidden from the stringifier — a protected code span, or the cell text itself —
+carries its pipes back in after the table has been written. Those pipes are escaped on
+the way back in, which is why `` `{item, state: ok\|failed\|skipped}` `` survives intact
+instead of splitting its row into five columns.
+
 ## Validation
 
 Every translation is validated, not just the `examples/` fixture.
