@@ -1287,7 +1287,9 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             if (text.includes('\n') || text.length < minLength * 2) {
                 continue;
             }
-            const repeated = this.findRepeatedSubstring(text, minLength);
+            // A never-translate term legitimately appears twice in one sentence, and its
+            // placeholder is long enough to look like a repeated clause on its own.
+            const repeated = this.findRepeatedSubstring(text.replace(/__MTX_\w+__|MTX_[A-Z]+_\d+_MTX/g, ' '), minLength);
             if (repeated) {
                 warnings.push(`entry id ${entry.id} repeats "${repeated}"`);
             }
