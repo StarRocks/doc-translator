@@ -137,3 +137,7 @@ List Partitioning: List 分区
 Range Partitioning: Range 分区
 Bitmap index: Bitmap 索引
 Bloom filter index: Bloom filter 索引
+Yes: 是
+No: 否
+None: 无
+Empty: 空
