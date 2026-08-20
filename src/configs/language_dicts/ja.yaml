@@ -155,3 +155,7 @@ logical view: ビュー
 join: ジョイン
 SHOW TABLES: SHOW TABLES
 ALTER TABLE: ALTER TABLE
+Yes: はい
+No: いいえ
+None: なし
+Empty: 空
