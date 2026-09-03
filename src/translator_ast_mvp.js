@@ -3,6 +3,7 @@ import path from 'path';
 import chalk from 'chalk';
 import fs from 'fs-extra';
 import Slugger from 'github-slugger';
+import remarkDirective from 'remark-directive';
 import remarkFrontmatter from 'remark-frontmatter';
 import remarkGfm from 'remark-gfm';
 import remarkMdx from 'remark-mdx';
@@ -24,8 +25,24 @@ class AstMarkdownTranslator extends MarkdownTranslator {
     // translatable item and the stringifier rebuilds the table structure. Without it the
     // whole table arrived as one item and the model had to reproduce every pipe by hand,
     // which is how a row shipped split across two lines.
+    // remark-directive makes `:::product{only="commercial"}` a containerDirective whose
+    // name and attributes are STRUCTURE rather than text, so neither can be translated.
+    // Without it, remark-mdx claims the `{...}` as an mdxTextExpression, which is not an
+    // inline-run node and therefore breaks the paragraph into separate runs -- leaving the
+    // bare string ":::product" as its own translatable item. A zh or ja pass has every
+    // reason to render that word, and the directive silently stops being a directive.
+    //
+    // `:::note` and friends survived without this only because they arrive as one opaque
+    // text blob, fences included, that the model reproduces along with the prose. They are
+    // now real directive nodes too, which is the intended behaviour but a change to how
+    // every existing admonition in the corpus is handled.
     createAstParser() {
-        return unified().use(remarkParse).use(remarkFrontmatter, ['yaml']).use(remarkGfm).use(remarkMdx);
+        return unified()
+        .use(remarkParse)
+        .use(remarkFrontmatter, ['yaml'])
+        .use(remarkGfm)
+        .use(remarkMdx)
+        .use(remarkDirective);
     }
 
     createAstStringifier() {
@@ -33,7 +50,8 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         .use(remarkFrontmatter, ['yaml'])
         .use(remarkStringify, { fences: true, bullet: '-', listItemIndent: 'one' })
         .use(remarkGfm)
-        .use(remarkMdx);
+        .use(remarkMdx)
+        .use(remarkDirective);
     }
 
     buildPlaceholder(id) {

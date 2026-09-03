@@ -42,7 +42,7 @@ Example: Create the external table `profile_parquet_p7` under the `rawdata` data
 
 The **esquery function** is used to push down queries **that cannot be expressed in SQL** (such as match and geoshape) to Elasticsearch for filtering. The first parameter in the esquery function is used to associate an index. The second parameter is a JSON expression of basic Query DSL, which is enclosed in brackets {}. **The JSON expression must have but only one root key**, such as match, geo_shape, or bool.
 
-For supported data types and data type mapping between StarRocks and target databases, see [Data type mapping](External_table.md#Data type mapping).
+For supported data types and data type mapping between StarRocks and target databases, see [Data type mapping](External_table.md#data-type-mapping).
 
 This is a sample markdown document that demonstrates various markdown elements for testing the translation tool.
 
@@ -479,6 +479,11 @@ When an admonition appears inside a numbered list item, its indentation must be 
 
 4. Verify the row counts match between staging and target.
 
+   :::product{only="commercial"}
+   Warehouse-level isolation means the load and the query can run on separate compute
+   resources. Set the warehouse before running INSERT OVERWRITE.
+   :::
+
 ## Details Block
 
 The HTML `<details>` element creates a collapsible section. Content indentation must be preserved:
@@ -504,3 +509,43 @@ For more information, see the following resources:
 - [Data type mapping](External_table.md#Data-type-mapping)
 - [Iceberg catalog](./catalog/iceberg/iceberg_catalog.md)
 
+## Product-conditional content
+
+:::product{only="commercial"}
+
+Cluster snapshots are taken automatically every four hours. Restoring a snapshot
+replaces the current cluster state, so verify the snapshot timestamp before you begin.
+
+:::
+
+:::product{only="oss"}
+
+Back up your data with the BACKUP statement before upgrading. The backup must complete
+before the upgrade begins, or the restore point will be inconsistent.
+
+:::
+
+:::product{only="cloud,manager"}
+
+Configure this in the console under **Cluster parameters**. Changes take effect after the
+cluster restarts.
+
+:::
+
+::::product{only="anywhere"}
+
+Set the value in the ConfigMap that supplies **cn.conf**, then restart the CN pods.
+
+:::warning
+`config` replaces **cn.conf** in full. Copy the whole block out of the chart's values file
+and add your parameter to it.
+:::
+
+::::
+
+| Feature | Shared-nothing | Shared-data | Products |
+| --- | --- | --- | --- |
+| Backup and Restore | v1.x+ | Not applicable | all |
+| Cross-cluster Data Migration Tool | v3.3+ | Not applicable | oss |
+| Failover Group | v3.3+ | Not applicable | commercial |
+| Cluster Snapshot | Not applicable | v3.4.2+ | all |
