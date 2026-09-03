@@ -9,6 +9,11 @@
  */
 
 import fs from 'fs-extra';
+import remarkDirective from 'remark-directive';
+import remarkFrontmatter from 'remark-frontmatter';
+import remarkGfm from 'remark-gfm';
+import remarkParse from 'remark-parse';
+import { unified } from 'unified';
 import AstMarkdownTranslator from '../src/translator_ast_mvp.js';
 import path from 'path';
 
@@ -82,14 +87,43 @@ function linesOutsideCode(content) {
     return result;
 }
 
+// Link destinations come from the PARSER, not from a regex over the source.
+//
+// `](...)` matches things that are not links. A destination containing an
+// unescaped space is not a link at all under CommonMark -- the whole construct
+// stays a text node and renders as literal brackets on the page. The regex
+// counted one such string as a URL, so when the model translated the prose (which
+// is what it is), the checker reported a link failure and sent me looking for a
+// translator bug that did not exist. The parser simply does not see a link there,
+// which is the correct answer and also the one that surfaces the real defect.
+// Deliberately WITHOUT remark-mdx. The translator's own parser includes it, but MDX
+// hands every `{...}` to acorn as JavaScript, and the corpus carries Airflow-style
+// `{{ data_interval_start }}` template text -- reusing that parser here fails with
+// "Could not parse expression with acorn". Finding links needs standard Markdown plus
+// GFM; remark-directive is present so `:::product` blocks are containers rather than
+// paragraphs, which keeps the links inside them countable.
+function markdownParser() {
+    return unified()
+    .use(remarkParse)
+    .use(remarkFrontmatter, ['yaml'])
+    .use(remarkGfm)
+    .use(remarkDirective);
+}
+
 function extractLinksOutsideCode(content) {
     const urls = [];
-    for (const line of linesOutsideCode(content)) {
-        for (const m of line.matchAll(/\]\(([^)]+)\)/g)) {
-            urls.push(m[1]);
-        }
-    }
+    visitNodes(markdownParser().parse(content), node => {
+        if (node.type === 'link') urls.push(node.url);
+        if (node.type === 'image') urls.push(node.url);
+        if (node.type === 'definition') urls.push(node.url);
+    });
     return urls;
+}
+
+function visitNodes(node, fn) {
+    if (!node) return;
+    fn(node);
+    for (const child of node.children || []) visitNodes(child, fn);
 }
 
 function extractHtmlTagsFromTableLines(content) {

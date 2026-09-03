@@ -42,7 +42,7 @@ Example: Create the external table `profile_parquet_p7` under the `rawdata` data
 
 The **esquery function** is used to push down queries **that cannot be expressed in SQL** (such as match and geoshape) to Elasticsearch for filtering. The first parameter in the esquery function is used to associate an index. The second parameter is a JSON expression of basic Query DSL, which is enclosed in brackets {}. **The JSON expression must have but only one root key**, such as match, geo_shape, or bool.
 
-For supported data types and data type mapping between StarRocks and target databases, see [Data type mapping](External_table.md#Data type mapping).
+For supported data types and data type mapping between StarRocks and target databases, see [Data type mapping](External_table.md#data-type-mapping).
 
 This is a sample markdown document that demonstrates various markdown elements for testing the translation tool.
 
