@@ -275,6 +275,97 @@ function checkImports(src, trn) {
     return result('Import statements', false, 'Mismatch', details);
 }
 
+// The :::product directive carries the whole multi-product contract: its NAME decides
+// that it is a product block at all, and its ATTRIBUTES decide who sees the content.
+// remark-directive makes both structural rather than textual, but that is exactly the
+// kind of guarantee worth asserting rather than assuming -- a translated name or a
+// mangled attribute is silent, because the page still builds and simply shows the
+// content to the wrong audience.
+
+// A `Products` table column is NOT protected by remark-directive -- the header and
+// every cell are ordinary table cells, translated like any other. A translated header
+// stops the build plugin recognising the column, so it ships to readers; a translated
+// cell makes the build fail on an unknown product id. This check exists because the
+// directive check above passed while `all` was quietly becoming a translated word.
+function checkProductsColumn(src, trn) {
+    function rows(content) {
+        const out = [];
+        let inTable = false;
+        let lastCol = -1;
+        for (const line of linesOutsideCode(content)) {
+            if (!line.trim().startsWith('|')) { inTable = false; lastCol = -1; continue; }
+            const cells = line.split('|').slice(1, -1).map(c => c.trim());
+            if (!inTable) {
+                lastCol = cells.length - 1;
+                inTable = cells[lastCol]?.toLowerCase() === 'products';
+                if (inTable) out.push({ kind: 'header', value: cells[lastCol] });
+                continue;
+            }
+            if (/^[-: ]+$/.test(cells[lastCol] ?? '')) continue;
+            out.push({ kind: 'cell', value: cells[lastCol] ?? '' });
+        }
+        return out;
+    }
+
+    const a = rows(src);
+    const b = rows(trn);
+
+    if (a.length === 0) {
+        return result('Products column', true, 'No Products column in source');
+    }
+    if (a.length !== b.length) {
+        return result('Products column', false,
+            `Source has ${a.length} Products entr(ies), translation has ${b.length} ` +
+            '(a translated header makes the column unrecognisable)');
+    }
+    const bad = a
+    .map((x, i) => (x.value === b[i].value ? null : `"${x.value}" became "${b[i].value}"`))
+    .filter(Boolean);
+
+    return bad.length === 0
+        ? result('Products column', true, `${a.length} entr(ies) preserved`)
+        : result('Products column', false, bad.join('; '));
+}
+
+function checkProductDirectives(src, trn) {
+    function directives(content) {
+        const found = [];
+        for (const line of linesOutsideCode(content)) {
+            const m = line.match(/^(\s*)(:{3,})product(\{[^}]*\})?\s*$/);
+            if (m) {
+                found.push({ indent: m[1].length, fence: m[2].length, attrs: m[3] || '' });
+            }
+        }
+        return found;
+    }
+
+    const a = directives(src);
+    const b = directives(trn);
+
+    if (a.length !== b.length) {
+        return result('Product directives', false,
+            `Source has ${a.length} :::product block(s), translation has ${b.length}`);
+    }
+    if (a.length === 0) {
+        return result('Product directives', true, 'No :::product blocks in source');
+    }
+
+    const bad = [];
+    for (let i = 0; i < a.length; i++) {
+        if (a[i].attrs !== b[i].attrs) {
+            bad.push(`#${i + 1}: attributes ${a[i].attrs || '(none)'} became ${b[i].attrs || '(none)'}`);
+        } else if (a[i].fence !== b[i].fence) {
+            bad.push(`#${i + 1}: fence length ${a[i].fence} became ${b[i].fence}`);
+        } else if (a[i].indent !== b[i].indent) {
+            bad.push(`#${i + 1}: indent ${a[i].indent} became ${b[i].indent}`);
+        }
+    }
+
+    return bad.length === 0
+        ? result('Product directives', true, `${a.length} block(s), names and attributes intact`)
+        : result('Product directives', false, bad.join('; '));
+}
+
 function checkAdmonitionCount(src, trn) {
     const s = countMatchingLines(src, /^\s*:::\w/);
     const t = countMatchingLines(trn, /^\s*:::\w/);
@@ -287,9 +378,9 @@ function checkAdmonitionIndentation(src, trn) {
     function admonitionLines(content) {
         const lines = [];
         for (const line of linesOutsideCode(content)) {
-            const open = line.match(/^(\s*)(:::\w+)/);
+            const open = line.match(/^(\s*)(:{3,}\w+)/);
             if (open) { lines.push({ indent: open[1].length, tag: open[2] }); continue; }
-            const close = line.match(/^(\s*):::[ \t]*$/);
+            const close = line.match(/^(\s*):{3,}[ \t]*$/);
             if (close) { lines.push({ indent: close[1].length, tag: ':::' }); }
         }
         return lines;
@@ -473,6 +564,8 @@ async function main() {
         checkImports,
         checkAdmonitionCount,
         checkAdmonitionIndentation,
+        checkProductDirectives,
+        checkProductsColumn,
         checkNeverTranslateTerms,
         checkListItemCount,
         checkTableColumnCounts,

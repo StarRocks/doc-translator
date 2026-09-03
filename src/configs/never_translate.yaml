@@ -529,3 +529,19 @@
 - WORK
 - WRITE
 - YEAR
+
+# Multi-product docs: the `Products` table column and its vocabulary.
+#
+# The :::product DIRECTIVE is protected structurally by remark-directive -- its name
+# and attributes are never text, so nothing can translate them. A Products COLUMN is
+# not: the header and each cell are ordinary table cells. A translated header stops
+# the build plugin recognising the column, and the column then ships to readers --
+# silently, because the page still builds.
+- Products
+- all
+- commercial
+- oss
+- cloud
+- anywhere
+- manager
+
