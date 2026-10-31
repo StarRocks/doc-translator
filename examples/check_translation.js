@@ -470,6 +470,30 @@ function checkHeadingAnchors(src, trn) {
     return result('Heading anchors', false, failures[0]);
 }
 
+// The classic `## Title {#id}` heading id is not valid MDX, so it fails the build of any
+// Docusaurus site that sets `future: { v4: true }` ("Could not parse expression with
+// acorn"). Heading ids must use the MDX comment form, `## Title {/* #id */}`. The page
+// title (H1) must carry no id at all: Docusaurus copies its raw text, id included, into
+// the page <title>. Lines inside fenced code are not headings and are skipped.
+function checkHeadingIdSyntax(src, trn) {
+    const translator = new AstMarkdownTranslator('unused', { quiet: true });
+    const offending = [];
+    translator.mapLinesOutsideCode(trn, (line) => {
+        if (/^[ \t]*#{1,6}[ \t].*\{#[^}\s]+\}[ \t]*$/.test(line)) {
+            offending.push(`classic id: ${line.trim()}`);
+        } else if (/^[ \t]*#[ \t].*\{\/\*[ \t]*#[^\s*]+[ \t]*\*\/\}[ \t]*$/.test(line)) {
+            offending.push(`id on H1: ${line.trim()}`);
+        }
+        return line;
+    });
+    if (offending.length === 0) {
+        return result('Heading ID syntax', true, 'All heading ids use {/* #id */}, none on H1');
+    }
+    return result('Heading ID syntax', false,
+        `${offending.length} heading id(s) must use {/* #id */} and not be on an H1`,
+        offending.join('\n'));
+}
+
 function checkTableColumnCounts(src, trn) {
     function colCounts(content) {
         const counts = [];
@@ -604,6 +628,7 @@ async function main() {
         checkListItemCount,
         checkTableColumnCounts,
         checkHeadingAnchors,
+        checkHeadingIdSyntax,
     ];
 
     const results = checks.map(fn => fn(src, trn));

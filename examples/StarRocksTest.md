@@ -509,6 +509,20 @@ For more information, see the following resources:
 - [Data type mapping](External_table.md#Data-type-mapping)
 - [Iceberg catalog](./catalog/iceberg/iceberg_catalog.md)
 
+## Explicit Heading IDs
+
+An author can give a heading an explicit ID. The translation must keep the ID unchanged and write every heading ID as an MDX comment, because the classic `{#id}` form fails the build of any Docusaurus site that sets `future: { v4: true }`.
+
+### Heading with an author-set ID {/* #author-set-heading-id */}
+
+Links to this heading, such as [the author-set ID](#author-set-heading-id), must keep working after translation.
+
+A heading-like line inside a code block is not a heading, so it must be left unchanged:
+
+```md
+## Example heading {#inside-code-block}
+```
+
 ## Product-conditional content
 
 :::product{only="commercial"}
