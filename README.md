@@ -242,8 +242,18 @@ Translating a heading changes its Docusaurus slug and silently breaks every inbo
 survive any rewording:
 
 ```md
-### 終了保護を有効または無効にする {#enable-or-disable-termination-protection}
+### 終了保護を有効または無効にする {/* #enable-or-disable-termination-protection */}
 ```
+
+The id is written as an MDX comment, which Docusaurus 3.10 and later reads. The classic
+`{#id}` syntax is not valid MDX: it builds only while `markdown.mdx1Compat.headingIds` is
+on, and `future: { v4: true }` turns that off, so the build fails with "Could not parse
+expression with acorn". A source heading may carry an id in either form; the output
+always uses the comment form.
+
+The page title (H1) never gets an id, not even one the author set. Docusaurus gives the
+H1 no anchor, and it copies the H1's raw text into the page `<title>`, sidebar and
+pagination labels, so an id there would show up as `{/* #id */}` in all of them.
 
 An id the author set explicitly is preserved as-is. Pass `--no-heading-anchors` to turn
 this off.

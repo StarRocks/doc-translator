@@ -14,6 +14,17 @@ import { visit } from 'unist-util-visit';
 
 import MarkdownTranslator from './translator.js';
 
+// A heading line ending in an explicit id: group 1 is the heading, group 2 the id in the
+// classic `{#id}` form, group 3 the id in the MDX comment `{/* #id */}` form.
+const EXPLICIT_HEADING_ID =
+    /^(#{1,6}[^\n]*?)(?:\{#([^}\s]+)\}|\{\/\*[ \t]*#([^\s*]+)[ \t]*\*\/\})[ \t]*$/;
+
+// Ids are written in the MDX comment form. Docusaurus has read it since 3.10.0 whatever
+// the mdx1Compat settings, whereas the classic `{#id}` fails the build of any site that
+// sets `future: { v4: true }`. Sites on an older Docusaurus would ignore the comment
+// and fall back to the slug of the translated heading.
+const formatHeadingId = slug => `{/* #${slug} */}`;
+
 class AstMarkdownTranslator extends MarkdownTranslator {
     static AST_CHUNK_MAX_CHARS = 12000;
 
@@ -359,9 +370,11 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         return { content: protectedContent, spans };
     }
 
-    // MDX reads `{` as the start of an expression, so a Docusaurus explicit heading id
-    // (`## Title {#id}`) makes the parser throw - including on this tool's own output
-    // once it starts emitting them. Strip them before parsing, keyed by line so they can
+    // Explicit heading ids come in two forms. The classic `## Title {#id}` is not valid
+    // MDX - `{` opens an expression - so it only builds while Docusaurus's
+    // markdown.mdx1Compat.headingIds is on, which `future: { v4: true }` turns off (as
+    // StarRocks and celerdata-enterprise do). The MDX comment form, `## Title {/* #id */}`,
+    // is valid MDX under any settings. Read both, strip them before parsing, keyed by line so they can
     // be put back on the same headings, and leave fenced code untouched.
     stripExplicitHeadingIds(content) {
         const lines = content.split('\n');
@@ -388,11 +401,11 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                 return line;
             }
 
-            const headingMatch = line.match(/^(#{1,6}[^\n]*?)\{#([^}\s]+)\}[ \t]*$/);
+            const headingMatch = line.match(EXPLICIT_HEADING_ID);
             if (!headingMatch) {
                 return line;
             }
-            idsByLine.set(index + 1, headingMatch[2]);
+            idsByLine.set(index + 1, headingMatch[2] || headingMatch[3]);
             return headingMatch[1].trimEnd();
         }).join('\n');
 
@@ -682,17 +695,21 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                 } else {
                     slug = slugger.slug(headingText);
                 }
-                if (slug) {
+                // No id on the page title (H1): Docusaurus gives it no anchor, and it
+                // copies the H1's raw text - comment id and all - into the page <title>,
+                // sidebar and pagination labels. The slug is still reserved above, so
+                // later headings number their repeats the same way.
+                if (slug && node.depth > 1) {
                     headingAnchors.set(node, slug);
                 }
             });
         } else if (idsByLine.size > 0) {
-            // --no-heading-anchors: stripExplicitHeadingIds already removed {#id} from
+            // --no-heading-anchors: stripExplicitHeadingIds already removed the ids from
             // the source text so the MDX parser can handle it. Re-add author-supplied ids
             // as protected placeholders so they survive translation unchanged.
             visit(tree, 'heading', (node) => {
                 const existingId = idsByLine.get(node.position?.start?.line);
-                if (existingId) {
+                if (existingId && node.depth > 1) {
                     headingAnchors.set(node, existingId);
                 }
             });
@@ -701,7 +718,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         processChildrenForInlineCodeContext(tree);
 
         for (const [node, slug] of headingAnchors) {
-            node.children.push({ type: 'text', value: protect('ANCHOR', ` {#${slug}}`) });
+            node.children.push({ type: 'text', value: protect('ANCHOR', ` ${formatHeadingId(slug)}`) });
         }
 
         // Translate description and sidebar_label values in YAML frontmatter.
@@ -1177,11 +1194,16 @@ class AstMarkdownTranslator extends MarkdownTranslator {
                 return;
             }
             const existingId = idsByLine.get(node.position?.start?.line);
+            let slug;
             if (existingId) {
                 slugger.slug(existingId);
-                slugs.push(existingId);
+                slug = existingId;
             } else {
-                slugs.push(slugger.slug(headingText));
+                slug = slugger.slug(headingText);
+            }
+            // The H1 is reserved but carries no id; see translateMarkdownAstMvp.
+            if (node.depth > 1) {
+                slugs.push(slug);
             }
         });
 
@@ -1194,9 +1216,9 @@ class AstMarkdownTranslator extends MarkdownTranslator {
             // Headings nested inside a JSX block carry that block's indentation, and the
             // expectation side reads them from the AST, so anchoring at column 0 here
             // reported a correctly emitted anchor as missing.
-            const match = line.match(/^[ \t]*#{1,6}[^\n]*?\{#([^}\s]+)\}[ \t]*$/);
+            const match = line.replace(/^[ \t]+/, '').match(EXPLICIT_HEADING_ID);
             if (match) {
-                ids.push(match[1]);
+                ids.push(match[2] || match[3]);
             }
             return line;
         });
@@ -1219,7 +1241,7 @@ class AstMarkdownTranslator extends MarkdownTranslator {
         if (missing.length === 0) {
             return [];
         }
-        const shown = missing.slice(0, 5).map(slug => `{#${slug}}`).join(', ');
+        const shown = missing.slice(0, 5).map(formatHeadingId).join(', ');
         return [`translated headings are missing ${missing.length} source anchor(s): ${shown}` +
             `${missing.length > 5 ? ', …' : ''}`];
     }

@@ -9,6 +9,14 @@ const config = {
   onBrokenLinks: 'ignore',
   onBrokenAnchors: 'ignore',
 
+  // Parse Markdown the way StarRocks and celerdata-enterprise do. Their
+  // `future: { v4: true }` turns every mdx1Compat option off, and with headingIds off
+  // the classic `## Title {#id}` heading id is a build error. Set here directly rather
+  // than through future.v4, which would also switch on unrelated v4 behaviour.
+  markdown: {
+    mdx1Compat: { comments: false, admonitions: false, headingIds: false },
+  },
+
   presets: [
     [
       'classic',
