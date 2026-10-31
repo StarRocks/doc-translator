@@ -1,6 +1,6 @@
 {
   "name": "doc-translator",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "A command line tool to translate markdown and MDX files using Claude AI",
   "type": "module",
   "main": "index.js",
